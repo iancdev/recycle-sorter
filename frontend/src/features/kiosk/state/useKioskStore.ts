@@ -1,6 +1,11 @@
 import { create } from "zustand";
 
 import type { AuthenticateBarcodeResponse } from "../api/authenticate-barcode";
+import type {
+  CategoryRow,
+  SessionItemRecord,
+  SessionRow,
+} from "../types";
 
 type KioskStatus = "idle" | "authenticating" | "ready" | "error";
 
@@ -17,10 +22,17 @@ interface KioskState {
   profile: Nullable<SessionPayload["profile"]>;
   identifier: Nullable<SessionPayload["identifier"]>;
   authMeta: Nullable<SessionPayload["auth"]>;
+  categories: Record<string, CategoryRow>;
+  sessionItems: SessionItemRecord[];
   setAuthenticating: (barcode: string) => void;
   setReady: (payload: SessionPayload) => void;
   setError: (message: string) => void;
   reset: () => void;
+  setCategories: (categories: CategoryRow[]) => void;
+  setSessionItems: (items: SessionItemRecord[]) => void;
+  prependSessionItem: (item: SessionItemRecord) => void;
+  updateSession: (session: SessionRow) => void;
+  clearSessionData: () => void;
 }
 
 const initialState: Pick<
@@ -33,6 +45,8 @@ const initialState: Pick<
   | "profile"
   | "identifier"
   | "authMeta"
+  | "categories"
+  | "sessionItems"
 > = {
   status: "idle",
   errorMessage: undefined,
@@ -42,7 +56,16 @@ const initialState: Pick<
   profile: null,
   identifier: null,
   authMeta: null,
+  categories: {},
+  sessionItems: [],
 };
+
+function sortItemsDesc(items: SessionItemRecord[]): SessionItemRecord[] {
+  return [...items].sort(
+    (a, b) =>
+      new Date(b.detected_at).getTime() - new Date(a.detected_at).getTime(),
+  );
+}
 
 export const useKioskStore = create<KioskState>((set) => ({
   ...initialState,
@@ -63,6 +86,7 @@ export const useKioskStore = create<KioskState>((set) => ({
       authMeta: payload.auth,
       lastScannedBarcode: state.lastScannedBarcode,
       lastScannedAt: state.lastScannedAt,
+      sessionItems: [],
     })),
   setError: (message) =>
     set(() => ({
@@ -70,4 +94,31 @@ export const useKioskStore = create<KioskState>((set) => ({
       errorMessage: message,
     })),
   reset: () => set(() => ({ ...initialState })),
+  setCategories: (categories) =>
+    set((state) => {
+      const merged = { ...state.categories };
+      for (const category of categories) {
+        merged[category.id] = category;
+      }
+      return { categories: merged };
+    }),
+  setSessionItems: (items) => set(() => ({ sessionItems: sortItemsDesc(items) })),
+  prependSessionItem: (item) =>
+    set((state) => {
+      const exists = state.sessionItems.find((entry) => entry.id === item.id);
+      const next = exists
+        ? [item, ...state.sessionItems.filter((entry) => entry.id !== item.id)]
+        : [item, ...state.sessionItems];
+      return { sessionItems: sortItemsDesc(next) };
+    }),
+  updateSession: (session) =>
+    set((state) => ({
+      session:
+        state.session && state.session.id === session.id ? session : state.session,
+    })),
+  clearSessionData: () =>
+    set(() => ({
+      sessionItems: [],
+      session: null,
+    })),
 }));

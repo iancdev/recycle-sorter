@@ -53,3 +53,14 @@
 - Browser: iPad Safari 17+ (BarcodeDetector supported).
 - Libraries: `@supabase/supabase-js`, `@zxing/browser`, `zustand` or `jotai`, `framer-motion` for animations.
 
+
+## Progress Snapshot (current)
+- `/kiosk` route scaffolding in place with barcode scanner loop, Supabase client provider, and session store.
+- Kiosk UI renders camera preview, session summary, latest item card, and receipt list fed by realtime Supabase updates.
+- Supabase edge functions integrated via browser helpers for barcode auth and session closure.
+
+## Remaining Work
+- Listen for realtime balance updates on `profiles` or derive via `transactions` stream to keep cached balance accurate.
+- Surface visual/audio feedback for each deposit (LLM blurb + ElevenLabs playback).
+- Implement inactivity timeout + auto-close session with confirmation prompt.
+- Add item detail modals and error recovery flows for camera failures or auth retries.
