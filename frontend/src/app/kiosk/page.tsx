@@ -1,5 +1,6 @@
 "use client";
 
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { authenticateBarcode } from "../../features/kiosk/api/authenticate-barcode";
@@ -9,6 +10,8 @@ import { useSessionRealtime } from "../../features/kiosk/hooks/useSessionRealtim
 import { useKioskStore } from "../../features/kiosk/state/useKioskStore";
 import { appConfig } from "../../lib/config";
 import { formatCurrencyFromCents } from "../../lib/format";
+
+const INACTIVITY_TIMEOUT_MS = 2 * 60 * 1000;
 
 const STATUS_LABELS = {
   idle: "Ready to scan",
@@ -24,7 +27,6 @@ const SCANNER_STATUS_LABELS = {
   error: "Camera unavailable",
 } as const;
 
-const INACTIVITY_TIMEOUT_MS = 2 * 60 * 1000;
 
 export default function KioskPage(): JSX.Element {
   const [isClosing, setIsClosing] = useState(false);
@@ -41,6 +43,8 @@ export default function KioskPage(): JSX.Element {
   const categories = useKioskStore((state) => state.categories);
 
   useSessionRealtime(session?.id ?? null, profile?.id ?? null);
+
+  const enableIdleTimeout = appConfig.enableIdleTimeout;
 
   const handleBarcode = useCallback(async (rawBarcode: string) => {
     const trimmed = rawBarcode.trim();
@@ -141,7 +145,7 @@ export default function KioskPage(): JSX.Element {
   }, [isClosing]);
 
   useEffect(() => {
-    if (status !== "ready" || !session || !lastActivityAt) {
+    if (!enableIdleTimeout || status !== "ready" || !session || !lastActivityAt) {
       setCountdown(null);
       return;
     }
@@ -170,7 +174,7 @@ export default function KioskPage(): JSX.Element {
     return () => {
       window.clearInterval(interval);
     };
-  }, [handleCloseSession, lastActivityAt, session, status]);
+  }, [enableIdleTimeout, handleCloseSession, lastActivityAt, session, status]);
 
   return (
     <div className="flex min-h-screen flex-col">

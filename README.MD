@@ -26,3 +26,4 @@ This repository hosts the software for the recycling kiosk project outlined in `
 ### Kiosk App
 - Visit `/kiosk` to launch the in-progress kiosk experience.
 - Ensure `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are set before running the frontend locally.
+- Optional: set `NEXT_PUBLIC_ENABLE_IDLE_TIMEOUT=false` to disable kiosk auto-close.
