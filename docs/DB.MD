@@ -50,11 +50,13 @@ One row per edge-classified item.
 - `session_id UUID FK -> sessions.id`.
 - `category_id UUID FK -> categories.id`.
 - `transaction_id UUID FK -> transactions.id NULL` (set when the payout posts).
+- `client_ref UUID NULL` (edge device generated idempotency key; unique per session).
 - `detected_at TIMESTAMPTZ DEFAULT now()`.
 - `confidence NUMERIC(5,4)` (0-1 score from CV model).
 - `amount_cents BIGINT` (amount awarded for this item).
 - `raw_payload JSONB` (model outputs, ESP32 feedback).
 - **Index** on (`session_id`, `detected_at`).
+- **Unique** on (`session_id`, `client_ref`) when `client_ref` present.
 
 ### transactions
 Ledger that backs balances and receipts.
@@ -108,7 +110,7 @@ Current deployment keeps the table minimal: a single row with a friendly label.
 ## Data Flow Highlights
 1. **Sign-in**: Kiosk scans barcode, looks up `profile_identifiers`. Missing profile triggers `profiles` insert inside the same transaction, linking `auth.users` row.
 2. **Session boot**: New row in `sessions` (`status = active`, `total_cents = 0`). Kiosk subscribes to this session via Realtime and shows baseline balance from `profiles`.
-3. **Classification**: Edge device inserts into `session_items`. A serverless function (or edge worker) calculates `amount_cents` from `categories.deposit_cents`, posts a `transactions` credit, and links the item via `transaction_id`.
+3. **Classification**: Edge device invokes the `record_session_item` RPC via an edge function, which atomically calculates the payout (respecting overrides), inserts the ledger entry when refundable, and links the resulting `session_items` row using an optional `client_ref` idempotency key.
 4. **Balance update**: Trigger on `transactions` bumps `profiles.balance_cents` and `sessions.total_cents`. Realtime pushes the results to kiosk and dashboard.
 5. **Session close**: Kiosk sets `status = complete`, stamps `completed_at`. A cleanup job can expire dormant sessions.
 
@@ -119,3 +121,9 @@ Current deployment keeps the table minimal: a single row with a friendly label.
 - Support multi-campus deployments via `locations` and partitioned `kiosks` tables keyed into `sessions` and `edge_devices`.
 - Harden multi-device deployments by layering API keys/heartbeat tracking and expanding RLS policies when needed.
 
+
+### record_session_item RPC
+- Wraps session classification inserts in a single transaction to keep ledger, session totals, and item audit trail consistent.
+- Accepts `session_id`, `category_slug`, optional `amount_override`, `confidence`, `raw_payload`, and `client_ref` (for idempotent retries).
+- Returns JSON containing the inserted `session_items` row, the associated `transactions` row when applicable, and the current session + category metadata.
+- Ignores repeat submissions automatically when `client_ref` matches an existing row for the same session.

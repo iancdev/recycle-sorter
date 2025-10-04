@@ -73,3 +73,13 @@ Edge functions read from the following environment variables when deployed or em
 - `KIOSK_REDIRECT_URL` – optional; overrides the magic-link redirect used by `authenticate-barcode`. Defaults to `http://localhost:3000/kiosk` during local development.
 
 To provide custom values locally, add them to `supabase/.env` and start the stack with `npx supabase start`. The CLI automatically injects variables from that file into the runtime.
+## Edge Functions
+- `authenticate-barcode`: creates/looks up users by barcode, ensures one active session, returns magic link payload. POST payload `{ barcode, displayName?, edgeDeviceLabel? }`.
+- `record-item`: invoked by the edge computer after classification. POST payload `{ sessionId, categorySlug, confidence?, amountOverrideCents?, rawPayload?, clientRef? }`.
+- `close-session`: kiosk/dashboard call to mark a session finished. POST payload `{ sessionId, status? }` with status in `complete | expired | error`.
+
+Serve functions locally with hot reload:
+```bash
+npx supabase functions serve --env supabase/.env
+```
+Then call endpoints at `http://localhost:54321/functions/v1/<function-name>`.

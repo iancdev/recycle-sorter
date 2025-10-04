@@ -21,3 +21,4 @@ This repository hosts the software for the recycling kiosk project outlined in `
 ### Supabase Development
 - Schema, migration, and seed files live under `supabase/`.
 - Follow `docs/SUPABASE_DEV.MD` for instructions on running the local stack and generating TypeScript types.
+- Edge functions live under `supabase/functions/`; see `docs/SUPABASE_DEV.MD` for available endpoints.
