@@ -1,0 +1,8 @@
+# Root-level ignores
+.env.local
+node_modules/
+.DS_Store
+
+# Ignore local Next.js outputs if created at root
+.next/
+
