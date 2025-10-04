@@ -13,7 +13,7 @@ type UseBarcodeScannerOptions = {
 };
 
 interface UseBarcodeScannerResult {
-  videoRef: React.RefObject<HTMLVideoElement>;
+  videoRef: React.RefObject<HTMLVideoElement | null>;
   status: ScannerStatus;
   errorMessage?: string;
   start: () => Promise<void>;
@@ -25,7 +25,7 @@ export function useBarcodeScanner(
 ): UseBarcodeScannerResult {
   const { onScan, facingMode = "user", debounceMs = 1200 } = options;
 
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const readerRef = useRef<BrowserMultiFormatReader | null>(null);
   const controlsRef = useRef<IScannerControls | null>(null);
   const lastScanRef = useRef<{ value: string; timestamp: number } | null>(null);
@@ -37,7 +37,6 @@ export function useBarcodeScanner(
     controlsRef.current?.stop();
     controlsRef.current = null;
 
-    readerRef.current?.reset();
     readerRef.current = null;
 
     if (videoRef.current?.srcObject instanceof MediaStream) {

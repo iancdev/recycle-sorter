@@ -1,6 +1,7 @@
 "use client";
 
 
+import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { authenticateBarcode } from "../../features/kiosk/api/authenticate-barcode";
@@ -29,7 +30,7 @@ const SCANNER_STATUS_LABELS = {
 } as const;
 
 
-export default function KioskPage(): JSX.Element {
+export default function KioskPage(): ReactElement {
   const [isClosing, setIsClosing] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
 

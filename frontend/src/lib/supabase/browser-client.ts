@@ -13,6 +13,26 @@ export function getSupabaseBrowserClient(): SupabaseClient<Database> {
     return browserClient;
   }
 
+  if (!appConfig.supabaseUrl || !appConfig.supabaseAnonKey) {
+    if (typeof window === "undefined") {
+      const noop = new Proxy(
+        {},
+        {
+          get() {
+            throw new Error(
+              "Supabase client unavailable during build. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.",
+            );
+          },
+        },
+      ) as SupabaseClient<Database>;
+      return noop;
+    }
+
+    throw new Error(
+      "Missing Supabase environment configuration. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.",
+    );
+  }
+
   browserClient = createBrowserClient<Database>(
     appConfig.supabaseUrl,
     appConfig.supabaseAnonKey,

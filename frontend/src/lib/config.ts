@@ -22,18 +22,58 @@ function getBooleanEnv(name: string, defaultValue: boolean): boolean {
   return defaultValue;
 }
 
-function getRequiredEnv(name: string): string {
-  const value = process.env[name];
-
-  if (!value || value.length === 0) {
-    throw new Error(`Missing required environment variable: ${name}`);
+function resolveSupabaseUrl(): string {
+  const direct = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (direct && direct.length > 0) {
+    return direct;
   }
 
-  return value;
+  const projectId = process.env.SUPABASE_PROJECT_ID;
+  if (projectId && projectId.length > 0) {
+    const derived = `https://${projectId}.supabase.co`;
+    console.warn(
+      "NEXT_PUBLIC_SUPABASE_URL not set; deriving from SUPABASE_PROJECT_ID as",
+      derived,
+    );
+    return derived;
+  }
+
+  if (typeof window === "undefined") {
+    console.warn(
+      "Missing NEXT_PUBLIC_SUPABASE_URL; falling back to empty string. Set NEXT_PUBLIC_SUPABASE_URL or SUPABASE_PROJECT_ID.",
+    );
+    return "";
+  }
+
+  throw new Error("Missing required environment variable: NEXT_PUBLIC_SUPABASE_URL");
 }
 
-const supabaseUrl = getRequiredEnv("NEXT_PUBLIC_SUPABASE_URL");
-const supabaseAnonKey = getRequiredEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY");
+function resolveSupabaseAnonKey(): string {
+  const direct = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (direct && direct.length > 0) {
+    return direct;
+  }
+
+  const fallback = process.env.SUPABASE_ANON_KEY;
+  if (fallback && fallback.length > 0) {
+    console.warn(
+      "NEXT_PUBLIC_SUPABASE_ANON_KEY not set; using SUPABASE_ANON_KEY fallback.",
+    );
+    return fallback;
+  }
+
+  if (typeof window === "undefined") {
+    console.warn(
+      "Missing NEXT_PUBLIC_SUPABASE_ANON_KEY; falling back to empty string. Set NEXT_PUBLIC_SUPABASE_ANON_KEY or SUPABASE_ANON_KEY.",
+    );
+    return "";
+  }
+
+  throw new Error("Missing required environment variable: NEXT_PUBLIC_SUPABASE_ANON_KEY");
+}
+
+const supabaseUrl = resolveSupabaseUrl();
+const supabaseAnonKey = resolveSupabaseAnonKey();
 const edgeDeviceLabel =
   process.env.NEXT_PUBLIC_KIOSK_EDGE_DEVICE_LABEL?.trim() || "demo_kiosk";
 const enableIdleTimeout = getBooleanEnv(
