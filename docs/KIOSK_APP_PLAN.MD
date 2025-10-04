@@ -65,3 +65,9 @@
 - Implement inactivity timeout + auto-close session with confirmation prompt.
 - Add item detail modals and error recovery flows for camera failures or auth retries.
 
+
+## Upcoming Enhancements
+- Integrate Gemini prompt + ElevenLabs playback for deposit feedback.
+- Animate latest-item hero card with routing guidance cues.
+- Expand receipt list with filter/search + detailed modal view.
+- Add diagnostics panel for camera/ESP32 connectivity.
