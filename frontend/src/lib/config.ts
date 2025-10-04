@@ -3,6 +3,7 @@ export type AppConfig = {
   supabaseAnonKey: string;
   edgeDeviceLabel: string;
   enableIdleTimeout: boolean;
+  enableAudioFeedback: boolean;
 };
 
 
@@ -39,10 +40,15 @@ const enableIdleTimeout = getBooleanEnv(
   "NEXT_PUBLIC_ENABLE_IDLE_TIMEOUT",
   true,
 );
+const enableAudioFeedback = getBooleanEnv(
+  "NEXT_PUBLIC_ENABLE_AUDIO_FEEDBACK",
+  false,
+);
 
 export const appConfig: AppConfig = {
   supabaseUrl,
   supabaseAnonKey,
   edgeDeviceLabel,
   enableIdleTimeout,
+  enableAudioFeedback,
 };

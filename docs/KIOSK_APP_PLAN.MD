@@ -56,6 +56,7 @@
 
 ## Progress Snapshot (current)
 - Realtime balance + inactivity safeguards now implemented; remaining work shifts to audio feedback and advanced UI polish.
+- Placeholder announcement hook added for future Gemini/ElevenLabs integration.
 - `/kiosk` route scaffolding in place with barcode scanner loop, Supabase client provider, and session store.
 - Kiosk UI renders camera preview, session summary, latest item card, and receipt list fed by realtime Supabase updates.
 - Supabase edge functions integrated via browser helpers for barcode auth and session closure.

@@ -91,5 +91,6 @@ Set the following variables in `frontend/.env.local` (or the Netlify UI) so the 
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY` – anon API key.
 - `NEXT_PUBLIC_KIOSK_EDGE_DEVICE_LABEL` – optional; label reported to edge functions (defaults to `demo_kiosk`).
 - `NEXT_PUBLIC_ENABLE_IDLE_TIMEOUT` – optional; set to `false` to disable the kiosk inactivity auto-close (defaults to `true`).
+- `NEXT_PUBLIC_ENABLE_AUDIO_FEEDBACK` – optional; set to `true` to enable placeholder deposit announcements (defaults to `false`).
 
 After updating environment variables, restart `npm run dev` to ensure Next.js picks up the changes.

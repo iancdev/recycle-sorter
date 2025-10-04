@@ -7,6 +7,7 @@ import { authenticateBarcode } from "../../features/kiosk/api/authenticate-barco
 import { closeSession } from "../../features/kiosk/api/close-session";
 import { useBarcodeScanner } from "../../features/kiosk/hooks/useBarcodeScanner";
 import { useSessionRealtime } from "../../features/kiosk/hooks/useSessionRealtime";
+import { useDepositAnnouncements } from "../../features/kiosk/audio/useDepositAnnouncements";
 import { useKioskStore } from "../../features/kiosk/state/useKioskStore";
 import { appConfig } from "../../lib/config";
 import { formatCurrencyFromCents } from "../../lib/format";
@@ -45,6 +46,7 @@ export default function KioskPage(): JSX.Element {
   useSessionRealtime(session?.id ?? null, profile?.id ?? null);
 
   const enableIdleTimeout = appConfig.enableIdleTimeout;
+  const enableAudioFeedback = appConfig.enableAudioFeedback;
 
   const handleBarcode = useCallback(async (rawBarcode: string) => {
     const trimmed = rawBarcode.trim();
@@ -118,6 +120,12 @@ export default function KioskPage(): JSX.Element {
   const latestAmount = latestItem ? formatCurrencyFromCents(latestItem.amount_cents) : null;
 
   const receiptItems = useMemo(() => sessionItems.slice(0, 12), [sessionItems]);
+
+  const { announcement, isSynthesizing, clearAnnouncement } = useDepositAnnouncements({
+    latestItem,
+    latestCategory,
+    audioEnabled: enableAudioFeedback,
+  });
 
   const handleCloseSession = useCallback(async () => {
     if (isClosing) {
@@ -214,10 +222,17 @@ export default function KioskPage(): JSX.Element {
               {scannerError ? (
                 <p className="mt-2 text-xs text-rose-400">{scannerError}</p>
               ) : (
-                <p className="mt-2 text-xs text-neutral-400">
-                  Hold your card in front of the camera until it beeps. The
-                  front-facing camera is optimised for landscape orientation.
-                </p>
+                <>
+                  {enableAudioFeedback && (
+                    <p className="mt-2 text-xs text-neutral-500">
+                      Audio feedback idle. Scan an item to generate announcements.
+                    </p>
+                  )}
+                  <p className="mt-2 text-xs text-neutral-400">
+                    Hold your card in front of the camera until it beeps. The
+                    front-facing camera is optimised for landscape orientation.
+                  </p>
+                </>
               )}
             </div>
           </div>
@@ -268,7 +283,29 @@ export default function KioskPage(): JSX.Element {
           <div className="rounded-3xl border border-neutral-800 bg-neutral-900/60 p-6">
             <h2 className="text-lg font-semibold text-neutral-50">Latest item</h2>
             {status === "ready" && latestItem && latestCategory ? (
-              <div className="mt-4 space-y-3 text-sm text-neutral-200">
+              <div className="space-y-3 text-sm text-neutral-200">
+                {enableAudioFeedback ? (
+                  <div className="flex items-center justify-between rounded-2xl border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                    <span>
+                      {isSynthesizing
+                        ? "Preparing announcement…"
+                        : announcement?.text ?? "Ready to announce."}
+                    </span>
+                    {announcement && (
+                      <button
+                        type="button"
+                        onClick={clearAnnouncement}
+                        className="rounded-full border border-amber-400/60 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-amber-200 transition hover:bg-amber-400/10"
+                      >
+                        Dismiss
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-xs text-neutral-500">
+                    Audio feedback disabled. Set NEXT_PUBLIC_ENABLE_AUDIO_FEEDBACK=true to enable.
+                  </p>
+                )}
                 <div>
                   <p className="text-neutral-400">Category</p>
                   <p className="text-base font-semibold text-neutral-50">
@@ -297,10 +334,17 @@ export default function KioskPage(): JSX.Element {
                 )}
               </div>
             ) : (
-              <p className="mt-4 text-sm text-neutral-400">
-                Deposited items will appear here with category, reward, and
-                detection confidence.
-              </p>
+              <div className="mt-4 space-y-3 text-sm text-neutral-400">
+                <p>
+                  Deposited items will appear here with category, reward, and
+                  detection confidence.
+                </p>
+                {enableAudioFeedback && (
+                  <p className="text-xs text-neutral-500">
+                    Audio feedback idle. Scan an item to generate announcements.
+                  </p>
+                )}
+              </div>
             )}
           </div>
 
@@ -337,10 +381,17 @@ export default function KioskPage(): JSX.Element {
                 </div>
               </div>
             ) : (
-              <p className="mt-4 text-sm text-neutral-400">
-                Awaiting a valid scan. Session details will appear here once the
-                barcode is authenticated.
-              </p>
+              <>
+                {enableAudioFeedback && (
+                  <p className="mt-4 text-xs text-neutral-500">
+                    Audio feedback idle. Scan an item to generate announcements.
+                  </p>
+                )}
+                <p className="mt-4 text-sm text-neutral-400">
+                  Awaiting a valid scan. Session details will appear here once the
+                  barcode is authenticated.
+                </p>
+              </>
             )}
           </div>
 
@@ -380,10 +431,17 @@ export default function KioskPage(): JSX.Element {
                 })}
               </ul>
             ) : (
-              <p className="mt-4 text-sm text-neutral-400">
-                Once items are recognised, they will appear here with their
-                payout and detection confidence.
-              </p>
+              <>
+                {enableAudioFeedback && (
+                  <p className="mt-4 text-xs text-neutral-500">
+                    Audio feedback idle. Scan an item to generate announcements.
+                  </p>
+                )}
+                <p className="mt-4 text-sm text-neutral-400">
+                  Once items are recognised, they will appear here with their
+                  payout and detection confidence.
+                </p>
+              </>
             )}
           </div>
 
