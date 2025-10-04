@@ -17,3 +17,7 @@ This repository hosts the software for the recycling kiosk project outlined in `
 - Integrate Supabase for authentication, sessions, and realtime updates
 - Prototype the barcode scanning and session management logic
 
+
+### Supabase Development
+- Schema, migration, and seed files live under `supabase/`.
+- Follow `docs/SUPABASE_DEV.MD` for instructions on running the local stack and generating TypeScript types.
