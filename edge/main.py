@@ -117,12 +117,16 @@ def esp32Command(command):
         print(f"[ESP32] Failed to send command: {exc}")
         return 0
 
-def webcamFeed(*, max_frames=None, delay_seconds=0):
+def webcamFeed(*, max_frames=None, delay_seconds=0, show_window=False):
     """Continuously read frames from webcam, classify, and command ESP32."""
 
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         raise RuntimeError("Unable to open webcam (device index 0).")
+
+    if show_window:
+        cv2.namedWindow("Recycle Sorter", cv2.WINDOW_NORMAL)
+        cv2.resizeWindow("Recycle Sorter", 960, 540)
 
     processed = 0
     try:
@@ -130,6 +134,12 @@ def webcamFeed(*, max_frames=None, delay_seconds=0):
             ok, frame = cap.read()
             if not ok:
                 raise RuntimeError("Failed to read frame from webcam.")
+
+            if show_window:
+                cv2.imshow("Recycle Sorter", frame)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    print("[Webcam] Quit signal received.")
+                    break
 
             category_id = recognizeImage(frame)
             esp32Command(category_id)
@@ -142,6 +152,8 @@ def webcamFeed(*, max_frames=None, delay_seconds=0):
                 time.sleep(delay_seconds)
     finally:
         cap.release()
+        if show_window:
+            cv2.destroyWindow("Recycle Sorter")
 
 def _image_to_part(image, mime_type="image/jpeg"):
     """Convert a webcam frame or raw bytes into a Gemini content part."""
