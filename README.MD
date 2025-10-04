@@ -22,3 +22,7 @@ This repository hosts the software for the recycling kiosk project outlined in `
 - Schema, migration, and seed files live under `supabase/`.
 - Follow `docs/SUPABASE_DEV.MD` for instructions on running the local stack and generating TypeScript types.
 - Edge functions live under `supabase/functions/`; see `docs/SUPABASE_DEV.MD` for available endpoints.
+
+### Kiosk App
+- Visit `/kiosk` to launch the in-progress kiosk experience.
+- Ensure `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are set before running the frontend locally.

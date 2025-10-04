@@ -83,3 +83,12 @@ Serve functions locally with hot reload:
 npx supabase functions serve --env supabase/.env
 ```
 Then call endpoints at `http://localhost:54321/functions/v1/<function-name>`.
+
+
+## Frontend Environment
+Set the following variables in `frontend/.env.local` (or the Netlify UI) so the kiosk interface can talk to Supabase:
+- `NEXT_PUBLIC_SUPABASE_URL` – project URL from the Supabase dashboard.
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY` – anon API key.
+- `NEXT_PUBLIC_KIOSK_EDGE_DEVICE_LABEL` – optional; label reported to edge functions (defaults to `demo_kiosk`).
+
+After updating environment variables, restart `npm run dev` to ensure Next.js picks up the changes.
