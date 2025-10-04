@@ -3,6 +3,7 @@ import { create } from "zustand";
 import type { AuthenticateBarcodeResponse } from "../api/authenticate-barcode";
 import type {
   CategoryRow,
+  ProfileRow,
   SessionItemRecord,
   SessionRow,
 } from "../types";
@@ -18,6 +19,7 @@ interface KioskState {
   errorMessage?: string;
   lastScannedBarcode: Nullable<string>;
   lastScannedAt: Nullable<number>;
+  lastActivityAt: Nullable<number>;
   session: Nullable<SessionPayload["session"]>;
   profile: Nullable<SessionPayload["profile"]>;
   identifier: Nullable<SessionPayload["identifier"]>;
@@ -32,7 +34,9 @@ interface KioskState {
   setSessionItems: (items: SessionItemRecord[]) => void;
   prependSessionItem: (item: SessionItemRecord) => void;
   updateSession: (session: SessionRow) => void;
+  updateProfile: (profile: ProfileRow) => void;
   clearSessionData: () => void;
+  touchActivity: () => void;
 }
 
 const initialState: Pick<
@@ -41,6 +45,7 @@ const initialState: Pick<
   | "errorMessage"
   | "lastScannedBarcode"
   | "lastScannedAt"
+  | "lastActivityAt"
   | "session"
   | "profile"
   | "identifier"
@@ -52,6 +57,7 @@ const initialState: Pick<
   errorMessage: undefined,
   lastScannedBarcode: null,
   lastScannedAt: null,
+  lastActivityAt: null,
   session: null,
   profile: null,
   identifier: null,
@@ -75,6 +81,7 @@ export const useKioskStore = create<KioskState>((set) => ({
       errorMessage: undefined,
       lastScannedBarcode: barcode,
       lastScannedAt: Date.now(),
+      lastActivityAt: Date.now(),
     })),
   setReady: (payload) =>
     set((state) => ({
@@ -86,39 +93,56 @@ export const useKioskStore = create<KioskState>((set) => ({
       authMeta: payload.auth,
       lastScannedBarcode: state.lastScannedBarcode,
       lastScannedAt: state.lastScannedAt,
+      lastActivityAt: Date.now(),
       sessionItems: [],
+      categories: {},
     })),
   setError: (message) =>
     set(() => ({
       status: "error",
       errorMessage: message,
+      lastActivityAt: Date.now(),
     })),
   reset: () => set(() => ({ ...initialState })),
   setCategories: (categories) =>
-    set((state) => {
-      const merged = { ...state.categories };
-      for (const category of categories) {
-        merged[category.id] = category;
-      }
-      return { categories: merged };
-    }),
-  setSessionItems: (items) => set(() => ({ sessionItems: sortItemsDesc(items) })),
+    set(() => ({
+      categories: categories.reduce<Record<string, CategoryRow>>((acc, item) => {
+        acc[item.id] = item;
+        return acc;
+      }, {}),
+    })),
+  setSessionItems: (items) =>
+    set(() => ({
+      sessionItems: sortItemsDesc(items),
+    })),
   prependSessionItem: (item) =>
     set((state) => {
       const exists = state.sessionItems.find((entry) => entry.id === item.id);
       const next = exists
         ? [item, ...state.sessionItems.filter((entry) => entry.id !== item.id)]
         : [item, ...state.sessionItems];
-      return { sessionItems: sortItemsDesc(next) };
+      return {
+        sessionItems: sortItemsDesc(next),
+        lastActivityAt: Date.now(),
+      };
     }),
   updateSession: (session) =>
     set((state) => ({
       session:
         state.session && state.session.id === session.id ? session : state.session,
+      lastActivityAt: Date.now(),
+    })),
+  updateProfile: (profile) =>
+    set((state) => ({
+      profile:
+        state.profile && state.profile.id === profile.id ? profile : state.profile,
+      lastActivityAt: Date.now(),
     })),
   clearSessionData: () =>
     set(() => ({
       sessionItems: [],
       session: null,
+      lastActivityAt: null,
     })),
+  touchActivity: () => set(() => ({ lastActivityAt: Date.now() })),
 }));

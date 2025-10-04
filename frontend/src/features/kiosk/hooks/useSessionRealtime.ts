@@ -4,15 +4,20 @@ import { useEffect } from "react";
 
 import { useSupabaseClient } from "../providers/SupabaseClientProvider";
 import { useKioskStore } from "../state/useKioskStore";
-import type { SessionItemRecord, SessionRow } from "../types";
+import type { ProfileRow, SessionItemRecord, SessionRow } from "../types";
 
-export function useSessionRealtime(sessionId: string | null | undefined): void {
+export function useSessionRealtime(
+  sessionId: string | null | undefined,
+  profileId: string | null | undefined,
+): void {
   const supabase = useSupabaseClient();
   const setCategories = useKioskStore((state) => state.setCategories);
   const setSessionItems = useKioskStore((state) => state.setSessionItems);
   const prependSessionItem = useKioskStore((state) => state.prependSessionItem);
   const updateSession = useKioskStore((state) => state.updateSession);
+  const updateProfile = useKioskStore((state) => state.updateProfile);
   const clearSessionData = useKioskStore((state) => state.clearSessionData);
+  const touchActivity = useKioskStore((state) => state.touchActivity);
 
   useEffect(() => {
     if (!sessionId) {
@@ -67,6 +72,7 @@ export function useSessionRealtime(sessionId: string | null | undefined): void {
 
             if (!error && data && !isCancelled) {
               prependSessionItem(data as SessionItemRecord);
+              touchActivity();
             }
           } catch (error) {
             console.error("Failed to fetch new session item", error);
@@ -86,12 +92,31 @@ export function useSessionRealtime(sessionId: string | null | undefined): void {
             updateSession(payload.new as SessionRow);
           }
         },
-      )
-      .subscribe((status) => {
-        if (status === "CHANNEL_ERROR") {
-          console.error("Realtime channel error for session", sessionId);
-        }
-      });
+      );
+
+    if (profileId) {
+      channel.on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "profiles",
+          filter: `id=eq.${profileId}`,
+        },
+        (payload) => {
+          if (!isCancelled) {
+            updateProfile(payload.new as ProfileRow);
+            touchActivity();
+          }
+        },
+      );
+    }
+
+    channel.subscribe((status) => {
+      if (status === "CHANNEL_ERROR") {
+        console.error("Realtime channel error for session", sessionId);
+      }
+    });
 
     return () => {
       isCancelled = true;
@@ -102,10 +127,13 @@ export function useSessionRealtime(sessionId: string | null | undefined): void {
   }, [
     clearSessionData,
     prependSessionItem,
+    profileId,
     sessionId,
     setCategories,
     setSessionItems,
     supabase,
+    touchActivity,
+    updateProfile,
     updateSession,
   ]);
 }

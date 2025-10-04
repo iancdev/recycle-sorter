@@ -24,8 +24,11 @@ const SCANNER_STATUS_LABELS = {
   error: "Camera unavailable",
 } as const;
 
+const INACTIVITY_TIMEOUT_MS = 2 * 60 * 1000;
+
 export default function KioskPage(): JSX.Element {
   const [isClosing, setIsClosing] = useState(false);
+  const [countdown, setCountdown] = useState<number | null>(null);
 
   const reset = useKioskStore((state) => state.reset);
   const status = useKioskStore((state) => state.status);
@@ -33,10 +36,11 @@ export default function KioskPage(): JSX.Element {
   const session = useKioskStore((state) => state.session);
   const errorMessage = useKioskStore((state) => state.errorMessage);
   const lastScannedBarcode = useKioskStore((state) => state.lastScannedBarcode);
+  const lastActivityAt = useKioskStore((state) => state.lastActivityAt);
   const sessionItems = useKioskStore((state) => state.sessionItems);
   const categories = useKioskStore((state) => state.categories);
 
-  useSessionRealtime(session?.id ?? null);
+  useSessionRealtime(session?.id ?? null, profile?.id ?? null);
 
   const handleBarcode = useCallback(async (rawBarcode: string) => {
     const trimmed = rawBarcode.trim();
@@ -59,6 +63,7 @@ export default function KioskPage(): JSX.Element {
     }
 
     store.setAuthenticating(trimmed);
+    store.touchActivity();
 
     try {
       const payload = await authenticateBarcode({ barcode: trimmed });
@@ -111,6 +116,10 @@ export default function KioskPage(): JSX.Element {
   const receiptItems = useMemo(() => sessionItems.slice(0, 12), [sessionItems]);
 
   const handleCloseSession = useCallback(async () => {
+    if (isClosing) {
+      return;
+    }
+
     const store = useKioskStore.getState();
     const activeSession = store.session;
     if (!activeSession) {
@@ -129,7 +138,39 @@ export default function KioskPage(): JSX.Element {
     } finally {
       setIsClosing(false);
     }
-  }, []);
+  }, [isClosing]);
+
+  useEffect(() => {
+    if (status !== "ready" || !session || !lastActivityAt) {
+      setCountdown(null);
+      return;
+    }
+
+    let closed = false;
+
+    const tick = () => {
+      const remaining = INACTIVITY_TIMEOUT_MS - (Date.now() - lastActivityAt);
+
+      if (remaining <= 0) {
+        setCountdown(0);
+        if (!closed) {
+          closed = true;
+          handleCloseSession().catch((error) => {
+            console.error("Failed to auto-close session", error);
+          });
+        }
+        return;
+      }
+
+      setCountdown(Math.ceil(remaining / 1000));
+    };
+
+    tick();
+    const interval = window.setInterval(tick, 1000);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [handleCloseSession, lastActivityAt, session, status]);
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -182,6 +223,11 @@ export default function KioskPage(): JSX.Element {
               <div>
                 <p className="text-neutral-400">Kiosk status</p>
                 <p className="text-lg font-medium text-neutral-50">{statusLabel}</p>
+                {countdown !== null && status === "ready" && (
+                  <p className="mt-1 text-xs text-neutral-400">
+                    Session ends automatically in <span className="font-semibold text-neutral-200">{countdown}</span> seconds.
+                  </p>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 <button
