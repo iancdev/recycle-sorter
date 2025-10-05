@@ -208,6 +208,7 @@ class SerialESP32Client:
                     if m:
                         a, b = m.group(1), m.group(2)
                         self._last_state_line = text
+                        print(f"[ESP32] Latest state: {a}, {b}")
                         self._last_state_tuple = (a == "1", b == "1")
             except Exception:
                 # Soft-fail; brief sleep to avoid tight loop on error
