@@ -21,7 +21,7 @@ interface UseBarcodeScannerResult {
   stop: () => void;
 }
 
-const TARGET_CAMERA_LABEL = "Front Camera";
+const TARGET_CAMERA_LABEL = "Front Facing Camera";
 
 async function selectFrontCamera(fallbackFacingMode: "user" | "environment"): Promise<MediaTrackConstraints> {
   const selectByLabel = async (): Promise<MediaTrackConstraints | null> => {
@@ -77,6 +77,7 @@ export function useBarcodeScanner(
 
   const [status, setStatus] = useState<ScannerStatus>("idle");
   const statusRef = useRef<ScannerStatus>("idle");
+  const attemptCounterRef = useRef(0);
   const [errorMessage, setErrorMessage] = useState<string | undefined>(undefined);
 
   const stop = useCallback(() => {
@@ -90,6 +91,8 @@ export function useBarcodeScanner(
       videoRef.current.srcObject = null;
     }
 
+    attemptCounterRef.current = 0;
+    console.log("[barcode] Scanner stopped");
     statusRef.current = "idle";
     setStatus("idle");
   }, [setStatus]);
@@ -112,10 +115,12 @@ export function useBarcodeScanner(
 
     try {
       statusRef.current = "requesting";
+      console.log("[barcode] Requesting access to barcode scanner camera");
       setStatus("requesting");
       setErrorMessage(undefined);
 
       const videoConstraints = await selectFrontCamera(facingMode);
+      console.log("[barcode] Starting scanner with constraints", videoConstraints);
       const hints = new Map();
       hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.CODE_128]);
       const reader = new BrowserMultiFormatReader(hints);
@@ -138,23 +143,41 @@ export function useBarcodeScanner(
             const last = lastScanRef.current;
 
             if (last && last.value === value && now - last.timestamp < debounceMs) {
+              console.debug("[barcode] Duplicate scan ignored", {
+                value,
+                sinceLast: now - last.timestamp,
+              });
               return;
             }
 
             lastScanRef.current = { value, timestamp: now };
+            attemptCounterRef.current = 0;
+            console.log("[barcode] Successfully detected barcode", {
+              value,
+              format: "CODE_128",
+            });
             onScan?.(value);
           }
 
           if (error && statusRef.current !== "error") {
             // ZXing fires NotFoundExceptions during normal operation; ignore them.
             if (error.name === "NotFoundException") {
+              attemptCounterRef.current += 1;
+              if (attemptCounterRef.current % 15 === 0) {
+                console.log("[barcode] Scanning… no barcode yet", {
+                  attemptsSinceLast: attemptCounterRef.current,
+                });
+              }
               return;
             }
+
+            console.error("[barcode] Scanner error", error);
           }
         },
       );
 
       statusRef.current = "scanning";
+      console.log("[barcode] Scanner ready and watching for code 128 barcodes");
       setStatus("scanning");
     } catch (error) {
       console.error(error);
