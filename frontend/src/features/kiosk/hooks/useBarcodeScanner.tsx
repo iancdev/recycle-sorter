@@ -1,8 +1,47 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { prepareZXingModule, readBarcodes } from "zxing-wasm";
-import type { ReadResult, ReaderOptions } from "zxing-wasm";
+// Defer ZXing-WASM import to runtime to avoid Turbopack resolution issues on some CI
+type ReaderOptions = {
+  formats: string[];
+  tryHarder?: boolean;
+  tryRotate?: boolean;
+  tryInvert?: boolean;
+  tryDownscale?: boolean;
+  maxNumberOfSymbols?: number;
+  binarizer?: "LocalAverage" | "GlobalHistogram" | "FixedThreshold";
+};
+type ReadResult = { text?: string; format?: string };
+
+type ZXingModule = {
+  prepareZXingModule?: (opts?: { fireImmediately?: boolean }) => Promise<unknown>;
+  readBarcodes: (imageData: ImageData, options: ReaderOptions) => Promise<ReadResult[]>;
+} | null;
+
+let _zxing: ZXingModule = null;
+async function loadZXing(): Promise<ZXingModule> {
+  if (_zxing) return _zxing;
+  // Use dynamic import with computed specifier to prevent bundler static resolution
+  const dynImport = (spec: string): Promise<unknown> =>
+    (Function("s","return import(s)") as (s: string) => Promise<unknown>)(spec);
+  try {
+    const mod = (await dynImport("zxing-wasm/reader")) as ZXingModule;
+    if (mod && mod.prepareZXingModule) await mod.prepareZXingModule({ fireImmediately: true }).catch(() => undefined);
+    _zxing = mod;
+    return _zxing;
+  } catch (e1) {
+    try {
+      const mod2 = (await dynImport("zxing-wasm")) as ZXingModule;
+      if (mod2 && mod2.prepareZXingModule) await mod2.prepareZXingModule({ fireImmediately: true }).catch(() => undefined);
+      _zxing = mod2;
+      return _zxing;
+    } catch (e2) {
+      console.debug("[barcode] ZXing-WASM unavailable; BarcodeDetector only", e1, e2);
+      _zxing = null;
+      return _zxing;
+    }
+  }
+}
 
 type ScannerStatus = "idle" | "requesting" | "scanning" | "error";
 
@@ -97,13 +136,8 @@ const ZXING_FALLBACK_PROFILES: ReadonlyArray<ReaderOptions> = [
   },
 ];
 
-let zxingReadyPromise: Promise<void> | null = null;
-
-function ensureZXingModuleReady(): Promise<void> {
-  if (!zxingReadyPromise) {
-    zxingReadyPromise = prepareZXingModule({ fireImmediately: true }).then(() => undefined);
-  }
-  return zxingReadyPromise;
+async function ensureZXingModuleReady(): Promise<void> {
+  await loadZXing();
 }
 
 function calculateScale(video: HTMLVideoElement): number | null {
@@ -304,7 +338,9 @@ export function useBarcodeScanner(
       return;
     }
     try {
-      readResults = await readBarcodes(imageData, ZXING_OPTIONS);
+      const z = await loadZXing();
+      if (!z) return; // ZXing not available
+      readResults = await z.readBarcodes(imageData, ZXING_OPTIONS);
     } catch (error) {
       if (debugSampleRef.current < MAX_DEBUG_SAMPLES) {
         console.debug("[barcode] ZXing decode error", error);
@@ -313,9 +349,11 @@ export function useBarcodeScanner(
     }
 
     if (readResults.length === 0) {
+      const z = await loadZXing();
+      if (!z) return;
       for (const profile of ZXING_FALLBACK_PROFILES) {
         try {
-          readResults = await readBarcodes(imageData, profile);
+          readResults = await z.readBarcodes(imageData, profile);
         } catch (e) {
           if (debugSampleRef.current < MAX_DEBUG_SAMPLES) {
             console.debug("[barcode] ZXing fallback error", { binarizer: profile.binarizer }, e);
