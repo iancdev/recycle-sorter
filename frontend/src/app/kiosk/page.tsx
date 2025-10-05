@@ -47,7 +47,7 @@ export default function KioskPage(): ReactElement {
   const [showExpiredOverlay, setShowExpiredOverlay] = useState(false);
   const [showDiagnosticsPanel, setShowDiagnosticsPanel] = useState(false);
 
-  const reset = useKioskStore((state) => state.reset);
+  const resetStore = useKioskStore((state) => state.reset);
   const status = useKioskStore((state) => state.status);
   const profile = useKioskStore((state) => state.profile);
   const session = useKioskStore((state) => state.session);
@@ -60,10 +60,22 @@ export default function KioskPage(): ReactElement {
   const recentSessions = useKioskStore((state) => state.recentSessions);
   const setRecentSessions = useKioskStore((state) => state.setRecentSessions);
 
+  // Supabase client used for silent auth after barcode scan and for data fetching
+  const supabase = useSupabaseClient();
+
   useSessionRealtime(session?.id ?? null, profile?.id ?? null);
 
   const enableIdleTimeout = appConfig.enableIdleTimeout;
   const enableAudioFeedback = appConfig.enableAudioFeedback;
+
+  const resetKiosk = useCallback(async () => {
+    try {
+      await supabase.auth.signOut();
+    } catch {
+      // ignore sign-out errors; proceed to reset UI state
+    }
+    resetStore();
+  }, [supabase, resetStore]);
 
   const handleBarcode = useCallback(async (rawBarcode: string) => {
     const trimmed = rawBarcode.trim();
@@ -99,6 +111,48 @@ export default function KioskPage(): ReactElement {
     try {
       console.log("[barcode] Authenticating barcode", { trimmed });
       const payload = await authenticateBarcode({ barcode: trimmed });
+      // Perform silent login using OTP returned by the edge function
+      if (payload?.auth?.email && payload?.auth?.otp) {
+        const { error } = await supabase.auth.verifyOtp({
+          type: "email",
+          email: payload.auth.email,
+          token: payload.auth.otp,
+        });
+        if (error) {
+          throw error;
+        }
+
+        // Ensure the authenticated session is available before subscribing/fetching
+        // to avoid RLS-empty initial loads.
+        for (let i = 0; i < 20; i += 1) {
+          const { data } = await supabase.auth.getSession();
+          if (data.session) break;
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+      }
+      // Promote to a fresh session bound to this device to ensure edge publishes
+      // to the same session ID the kiosk is viewing.
+      try {
+        const res = await fetch("/api/kiosk/start-session", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            profileId: payload.profile.id,
+            edgeDeviceLabel: appConfig.edgeDeviceLabel,
+          }),
+        });
+        if (res.ok) {
+          const data = (await res.json()) as {
+            session: typeof payload.session;
+          };
+          payload.session = data.session;
+        } else {
+          console.warn("Failed to start fresh session; proceeding with existing.");
+        }
+      } catch (e) {
+        console.warn("start-session API error", e);
+      }
+
       console.log("[barcode] Barcode authenticated", {
         trimmed,
         sessionId: payload.session.id,
@@ -153,7 +207,7 @@ export default function KioskPage(): ReactElement {
     : null;
   const latestAmount = latestItem ? formatCurrencyFromCents(latestItem.amount_cents) : null;
 
-  const supabase = useSupabaseClient();
+  // Supabase client declared above for use in handlers
   const receiptItems = useMemo(() => sessionItems.slice(0, 12), [sessionItems]);
 
   const { announcement, isSynthesizing, clearAnnouncement } = useDepositAnnouncements({
@@ -217,7 +271,7 @@ export default function KioskPage(): ReactElement {
         v?.play().catch(() => undefined);
       }
     }
-  }, [status, start, stop]);
+  }, [status, start, stop, videoRef]);
 
   const showErrorOverlay = status === "error";
   const showEndedOverlay = Boolean(session && session.status && session.status !== "active");
@@ -226,21 +280,21 @@ export default function KioskPage(): ReactElement {
   useEffect(() => {
     if (showErrorOverlay) {
       const t = window.setTimeout(() => {
-        reset();
+        void resetKiosk();
       }, 3000);
       return () => window.clearTimeout(t);
     }
-  }, [showErrorOverlay, reset]);
+  }, [showErrorOverlay, resetKiosk]);
 
   // Auto-dismiss ended overlay after 3s by resetting kiosk to idle
   useEffect(() => {
     if (showEndedOverlay) {
       const t = window.setTimeout(() => {
-        reset();
+        void resetKiosk();
       }, 3000);
       return () => window.clearTimeout(t);
     }
-  }, [showEndedOverlay, reset]);
+  }, [showEndedOverlay, resetKiosk]);
 
   // Auto-dismiss expired overlay after 0.75s
   useEffect(() => {
@@ -270,17 +324,15 @@ export default function KioskPage(): ReactElement {
     }
 
     setIsClosing(true);
-    try {
-      await closeSession({ sessionId: activeSession.id });
-      store.reset();
-    } catch (error) {
-      console.warn("Close session failed; resetting kiosk", error);
-      // Treat failures as already-closed and reset without showing error overlay
-      store.reset();
-    } finally {
-      setIsClosing(false);
-    }
-  }, [isClosing]);
+    // Kick off server close and sign-out concurrently; don't block UI reset
+    void closeSession({ sessionId: activeSession.id }).catch((error) =>
+      console.warn("Close session failed; proceeding", error),
+    );
+    void supabase.auth.signOut().catch(() => undefined);
+    // Optimistic local reset so UI returns to idle immediately
+    store.reset();
+    setIsClosing(false);
+  }, [isClosing, supabase]);
 
   useEffect(() => {
     if (!enableIdleTimeout || status !== "ready" || !session || !lastActivityAt) {
@@ -326,7 +378,7 @@ export default function KioskPage(): ReactElement {
           <div className="flex flex-wrap items-center justify-center gap-3">
             <button
               type="button"
-              onClick={reset}
+              onClick={() => void resetKiosk()}
               className="rounded-full border border-rose-400/40 bg-rose-500/10 px-5 py-2 text-xs font-semibold uppercase tracking-wide text-rose-200 transition hover:bg-rose-500/20"
             >
               Reset kiosk
@@ -372,7 +424,7 @@ export default function KioskPage(): ReactElement {
           <div className="flex flex-wrap items-center justify-center gap-3">
             <button
               type="button"
-              onClick={reset}
+              onClick={() => void resetKiosk()}
               className="rounded-full border border-neutral-700 bg-neutral-800 px-5 py-2 text-xs font-semibold uppercase tracking-wide text-neutral-200 transition hover:bg-neutral-700"
             >
               Start new session
@@ -545,7 +597,7 @@ export default function KioskPage(): ReactElement {
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={reset}
+                  onClick={() => void resetKiosk()}
                   className="rounded-full border border-neutral-700 bg-neutral-800 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-neutral-200 transition hover:bg-neutral-700"
                 >
                   Reset kiosk

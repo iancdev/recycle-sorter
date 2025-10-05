@@ -35,7 +35,7 @@ interface UseBarcodeScannerResult {
 
 const TARGET_CAMERA_LABEL = "Front Camera";
 const MAX_FRAME_DIMENSION = 1920;
-const DEFAULT_DECODE_INTERVAL_MS = 15;
+const DEFAULT_DECODE_INTERVAL_MS = 60;
 const MAX_DEBUG_SAMPLES = 10;
 
 const BASE_VIDEO_CONSTRAINTS: Pick<MediaTrackConstraints, "width" | "height" | "frameRate" | "aspectRatio"> = {
@@ -73,7 +73,9 @@ const ZXING_OPTIONS: ReaderOptions = {
   tryHarder: true,
   tryRotate: true,
   tryInvert: true,
-  tryDownscale: false,
+  // Promote downscale into primary to match what works best on iPad
+  tryDownscale: true,
+  tryDenoise: false,
   maxNumberOfSymbols: 1,
   binarizer: "LocalAverage",
 };
@@ -85,6 +87,7 @@ const ZXING_FALLBACK_PROFILES: ReadonlyArray<ReaderOptions> = [
     tryRotate: true,
     tryInvert: true,
     tryDownscale: true,
+    tryDenoise: false,
     maxNumberOfSymbols: 1,
     binarizer: "LocalAverage",
   },
@@ -94,6 +97,7 @@ const ZXING_FALLBACK_PROFILES: ReadonlyArray<ReaderOptions> = [
     tryRotate: true,
     tryInvert: true,
     tryDownscale: true,
+    tryDenoise: false,
     maxNumberOfSymbols: 1,
     binarizer: "GlobalHistogram",
   },
@@ -103,6 +107,7 @@ const ZXING_FALLBACK_PROFILES: ReadonlyArray<ReaderOptions> = [
     tryRotate: true,
     tryInvert: true,
     tryDownscale: true,
+    tryDenoise: false,
     maxNumberOfSymbols: 1,
     binarizer: "FixedThreshold",
   },
@@ -289,16 +294,18 @@ export function useBarcodeScanner(
       try {
         const results = await barcodeDetectorRef.current.detect(canvasRef.current);
         const raw = (results[0]?.rawValue ?? "").trim();
-        if (raw) {
+        // Discard letters, keep non-letters (typically digits) for student ID
+        const sanitized = raw.replace(/[A-Za-z]/g, "").trim();
+        if (sanitized) {
           const now = Date.now();
           const last = lastScanRef.current;
-          if (!last || last.value !== raw || now - last.timestamp >= debounceMs) {
-            lastScanRef.current = { value: raw, timestamp: now };
+          if (!last || last.value !== sanitized || now - last.timestamp >= debounceMs) {
+            lastScanRef.current = { value: sanitized, timestamp: now };
             attemptCounterRef.current = 0;
-            console.log("[barcode] Detected via BarcodeDetector", { value: raw });
+            console.log("[barcode] Detected via BarcodeDetector", { value: sanitized, raw });
             lastDecoderInfoRef.current = { path: "BarcodeDetector", at: now };
             setDecoderInfo(lastDecoderInfoRef.current);
-            onScan?.(raw);
+            onScan?.(sanitized);
             return;
           }
         }
@@ -310,7 +317,7 @@ export function useBarcodeScanner(
       }
     }
 
-    // ZXing fallback (multi-pass)
+    // ZXing decode (primary + fallbacks)
     let readResults: ReadResult[] = [];
     let imageData: ImageData | null = null;
     try {
@@ -320,6 +327,8 @@ export function useBarcodeScanner(
       return;
     }
     try {
+      lastDecoderInfoRef.current = { path: "ZXing", profile: "primary", at: Date.now() };
+      setDecoderInfo(lastDecoderInfoRef.current);
       readResults = await readBarcodes(imageData, ZXING_OPTIONS);
     } catch (error) {
       if (debugSampleRef.current < MAX_DEBUG_SAMPLES) {
@@ -329,12 +338,28 @@ export function useBarcodeScanner(
     }
 
     if (readResults.length === 0) {
-      // Fallbacks disabled for diagnostics clarity
-      // (Leave the block present for easy reenabling later)
-      // If you want fallbacks, loop ZXING_FALLBACK_PROFILES here and set decoderInfo accordingly
-      return;
-    } else {
-      lastDecoderInfoRef.current = { path: "ZXing", profile: "primary", at: Date.now() };
+      for (const profile of ZXING_FALLBACK_PROFILES) {
+        try {
+          lastDecoderInfoRef.current = {
+            path: "ZXingFallback",
+            profile: String(profile.binarizer ?? "fallback"),
+            at: Date.now(),
+          };
+          setDecoderInfo(lastDecoderInfoRef.current);
+          readResults = await readBarcodes(imageData, profile);
+        } catch (e) {
+          if (debugSampleRef.current < MAX_DEBUG_SAMPLES) {
+            console.debug("[barcode] ZXing fallback error", { binarizer: profile.binarizer }, e);
+          }
+          readResults = [];
+        }
+        if (readResults.length > 0) {
+          break;
+        }
+      }
+      if (readResults.length === 0) {
+        return;
+      }
     }
 
     const [firstResult] = readResults;
@@ -342,27 +367,31 @@ export function useBarcodeScanner(
     if (!value) {
       return;
     }
+    const sanitized = value.replace(/[A-Za-z]/g, "").trim();
+    if (!sanitized) {
+      return;
+    }
 
     const now = Date.now();
     const last = lastScanRef.current;
-    if (last && last.value === value && now - last.timestamp < debounceMs) {
+    if (last && last.value === sanitized && now - last.timestamp < debounceMs) {
       if (debugSampleRef.current < MAX_DEBUG_SAMPLES) {
         console.debug("[barcode] Duplicate scan ignored", {
-          value,
+          value: sanitized,
           sinceLast: now - last.timestamp,
         });
       }
       return;
     }
 
-    lastScanRef.current = { value, timestamp: now };
+    lastScanRef.current = { value: sanitized, timestamp: now };
     attemptCounterRef.current = 0;
     console.log("[barcode] Successfully detected barcode", {
-      value,
+      value: sanitized,
       format: firstResult.format,
     });
     setDecoderInfo(lastDecoderInfoRef.current);
-    onScan?.(value);
+    onScan?.(sanitized);
     return;
   
     attemptCounterRef.current += 1;
@@ -603,5 +632,6 @@ export function useBarcodeScanner(
     start,
     stop,
     switchCamera,
+    decoderInfo,
   };
 }
