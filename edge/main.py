@@ -6,6 +6,14 @@ import uuid
 import cv2
 import requests
 
+try: 
+    import serial
+    from serial.tools import list_ports
+except ImportError as exc: 
+    raise ImportError(
+        "pyserial must be installed to use serial ESP32 communication"
+    ) from exc
+
 # Gemini requirements
 from google import genai
 from google.genai import types
@@ -33,107 +41,113 @@ CATEGORY_ID_TO_SLUG = {
     2: "bottle",
 }
 
+ESP32_BAUDRATE = 115200
+ESP32_COM_PORT_OVERRIDE = None
 
-class ArduinoCloudClient:
-    """Thin wrapper around Arduino Cloud REST API for ESP32 control."""
 
-    TOKEN_URL = "https://api2.arduino.cc/iot/v1/clients/token"
-    PROPERTY_URL_TEMPLATE = (
-        "https://api2.arduino.cc/iot/v2/things/{thing_id}/properties/{property_id}/publish"
+class SerialESP32Client:
+    """Handle direct serial communication with the ESP32 controller."""
+
+    _PREFERRED_KEYWORDS = (
+        "esp",
+        "cp210",
+        "usb",
+        "ch340",
+        "silicon labs",
+        "serial",
     )
 
-    def __init__(self, client_id, client_secret, thing_id, property_id, *, timeout=10):
-        missing = [
-            name
-            for name, value in (
-                ("ARDUINO_CLIENT_ID", client_id),
-                ("ARDUINO_CLIENT_SECRET", client_secret),
-                ("ARDUINO_THING_ID", thing_id),
-                ("ARDUINO_PROPERTY_ID", property_id),
-            )
-            if not value
-        ]
-        if missing:
-            raise EnvironmentError(
-                "Missing Arduino Cloud configuration: " + ", ".join(missing)
-            )
-
-        self._client_id = client_id
-        self._client_secret = client_secret
-        self._thing_id = thing_id
-        self._property_id = property_id
+    def __init__(self, *, com_override=None, baudrate=ESP32_BAUDRATE, timeout=2.0):
+        self._com_override = (com_override or "").strip() or None
+        self._baudrate = baudrate
         self._timeout = timeout
-
-        self._token = None
-        self._token_expiry = 0.0
+        self._serial = None
+        self._last_port = None
 
     @classmethod
     def from_env(cls):
-        return cls(
-            client_id=os.environ.get("ARDUINO_CLIENT_ID"),
-            client_secret=os.environ.get("ARDUINO_CLIENT_SECRET"),
-            thing_id=os.environ.get("ARDUINO_THING_ID"),
-            property_id=os.environ.get("ARDUINO_PROPERTY_ID"),
-        )
+        return cls(com_override=ESP32_COM_PORT_OVERRIDE)
 
-    def _obtain_token(self):
-        response = requests.post(
-            self.TOKEN_URL,
-            data={
-                "grant_type": "client_credentials",
-                "client_id": self._client_id,
-                "client_secret": self._client_secret,
-                "audience": "https://api2.arduino.cc/iot"
-            },
-            timeout=self._timeout,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        self._token = payload["access_token"]
-        expires_in = payload.get("expires_in", 0)
-        self._token_expiry = time.time() + max(int(expires_in) - 30, 0)
+    def _auto_detect_port(self):
+        ports = list(list_ports.comports())
+        if not ports:
+            raise RuntimeError("No serial ports detected while auto-discovering ESP32.")
 
-    def _ensure_token(self):
-        if not self._token or time.time() >= self._token_expiry:
-            self._obtain_token()
+        prioritized = [
+            port
+            for port in ports
+            if any(keyword in (port.description or "").lower() for keyword in self._PREFERRED_KEYWORDS)
+            or any(keyword in (port.manufacturer or "").lower() for keyword in self._PREFERRED_KEYWORDS)
+        ]
+
+        selected = prioritized[0] if prioritized else ports[0]
+        print(f"[ESP32] Auto-detected serial port: {selected.device} ({selected.description})")
+        return selected.device
+
+    def _resolve_port(self):
+        if self._com_override:
+            return self._com_override
+        return self._auto_detect_port()
+
+    def _ensure_connection(self):
+        if self._serial and self._serial.is_open:
+            return self._serial
+
+        port = self._resolve_port()
+        try:
+            self._serial = serial.Serial(
+                port=port,
+                baudrate=self._baudrate,
+                timeout=self._timeout,
+                write_timeout=self._timeout,
+            )
+            self._last_port = port
+            print(f"[ESP32] Opened serial connection on {port} at {self._baudrate} baud.")
+            time.sleep(2.0)  # allow ESP32 time to reset after connection
+        except serial.SerialException as exc:
+            raise RuntimeError(f"Failed to open serial port '{port}': {exc}") from exc
+
+        return self._serial
 
     def send_command(self, command_value):
-        self._ensure_token()
-
-        url = self.PROPERTY_URL_TEMPLATE.format(
-            thing_id=self._thing_id,
-            property_id=self._property_id,
-        )
-        headers = {
-            "Authorization": f"Bearer {self._token}",
-            "Content-Type": "application/json",
-        }
-        response = requests.put(
-            url,
-            headers=headers,
-            json={"value": command_value},
-            timeout=self._timeout,
-        )
-        response.raise_for_status()
+        connection = self._ensure_connection()
+        payload = f"{command_value}\n".encode("utf-8")
+        try:
+            connection.reset_output_buffer()
+            connection.write(payload)
+            connection.flush()
+            port_source = "override" if self._com_override else "auto"
+            print(
+                f"[ESP32] Command '{command_value}' sent over serial"
+                f" ({port_source} port {self._last_port})"
+            )
+        except serial.SerialException as exc:
+            if connection:
+                try:
+                    connection.close()
+                except Exception:  # pragma: no cover - best effort cleanup
+                    pass
+                self._serial = None
+            raise RuntimeError(f"Failed to write to ESP32 over serial: {exc}") from exc
         return True
 
 
-_arduino_client = None
+_serial_client = None
 _edge_device_id = None
 
 
-def get_arduino_client():
-    global _arduino_client
-    if _arduino_client is None:
-        _arduino_client = ArduinoCloudClient.from_env()
-    return _arduino_client
+def get_serial_client():
+    global _serial_client
+    if _serial_client is None:
+        _serial_client = SerialESP32Client.from_env()
+    return _serial_client
 
 def esp32Command(command):
-    """Send a command value to ESP32 via Arduino Cloud property."""
+    """Send a command value to ESP32 via direct serial communication."""
 
     print(f"[ESP32] Sending command to ESP32: {command}")
     try:
-        client = get_arduino_client()
+        client = get_serial_client()
         client.send_command(command)
         return 1
     except Exception as exc:  # pylint: disable=broad-except
@@ -363,9 +377,9 @@ def recognizeImage(image):
         system_instruction=[
             types.Part.from_text(text="""You are an image recognition software, designed to recognize the objects presented to be placed in the following categories. Of the below 3 category, return a category ID and category name of the recognized object.
 Categories:
-- Cans
-- Bottles
-- Garbage
+1. Cans
+2. Bottles
+3. Garbage
 Only recognize and categorize the primary object presented. If the primary object is not cans or bottles, it is garbage."""),
         ],
     )
