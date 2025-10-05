@@ -3,6 +3,9 @@
 node_modules/
 .DS_Store
 
+# Edge launch configuration (local only)
+edge/.launch.sh
+edge/.env.local
+
 # Ignore local Next.js outputs if created at root
 .next/
-
