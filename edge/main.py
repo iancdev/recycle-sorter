@@ -201,6 +201,7 @@ class SerialESP32Client:
                     continue
                 text = raw.decode("utf-8", errors="replace").strip()
                 if not text:
+                    print(f"[ESP32] Invalid state line: {text}")
                     continue
                 with self._state_lock:
                     self._lines_buffer.append(text)
@@ -208,7 +209,7 @@ class SerialESP32Client:
                     if m:
                         a, b = m.group(1), m.group(2)
                         self._last_state_line = text
-                        print(f"[ESP32] Latest state: {a}, {b}")
+                        print(f"[ESP32] Latest state: text {text}, a {a}, b {b}")
                         self._last_state_tuple = (a == "1", b == "1")
             except Exception:
                 # Soft-fail; brief sleep to avoid tight loop on error
