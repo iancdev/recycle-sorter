@@ -1,9 +1,12 @@
 "use client";
 
-import { BrowserMultiFormatReader } from "@zxing/browser";
-import type { IScannerControls } from "@zxing/browser";
-import { BarcodeFormat, DecodeHintType } from "@zxing/library";
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  prepareZXingModule,
+  readBarcodes,
+} from "zxing-wasm/reader";
+import type { ReadResult } from "zxing-wasm/reader";
+import { type ReaderOptions } from "zxing-wasm/reader";
 
 type ScannerStatus = "idle" | "requesting" | "scanning" | "error";
 
@@ -22,24 +25,70 @@ interface UseBarcodeScannerResult {
 }
 
 const TARGET_CAMERA_LABEL = "Front Camera";
-const BASE_VIDEO_CONSTRAINTS: Pick<MediaTrackConstraints, "width" | "height" | "frameRate"> = {
-  width: { ideal: 1280, min: 960 },
-  height: { ideal: 720, min: 540 },
+const MAX_FRAME_DIMENSION = 1280;
+const DECODE_INTERVAL_MS = 80; // ~12.5 fps
+const ROI_HEIGHT_FRACTION = 0.35; // central horizontal band
+const MAX_DEBUG_SAMPLES = 10;
+
+const BASE_VIDEO_CONSTRAINTS: Pick<MediaTrackConstraints, "width" | "height" | "frameRate" | "aspectRatio"> = {
+  width: { ideal: 1920, min: 960 },
+  height: { ideal: 1080, min: 540 },
+  aspectRatio: { ideal: 4 / 3 },
   frameRate: { ideal: 30, max: 60 },
 };
+const ADVANCED_VIDEO_SETTINGS: MediaTrackConstraintSet[] = [
+  { focusMode: "continuous" } as unknown as MediaTrackConstraintSet,
+  { exposureMode: "continuous" } as unknown as MediaTrackConstraintSet,
+  { whiteBalanceMode: "continuous" } as unknown as MediaTrackConstraintSet,
+];
+
+const ZXING_OPTIONS: ReaderOptions = {
+  formats: ["Code128"],
+  tryHarder: true,
+  tryRotate: true,
+  tryInvert: false,
+  tryDownscale: false,
+  maxNumberOfSymbols: 1,
+  binarizer: "LocalAverage",
+};
+
+let zxingReadyPromise: Promise<void> | null = null;
+
+function ensureZXingModuleReady(): Promise<void> {
+  if (!zxingReadyPromise) {
+    zxingReadyPromise = prepareZXingModule({ fireImmediately: true }).then(() => undefined);
+  }
+  return zxingReadyPromise;
+}
+
+function calculateScale(video: HTMLVideoElement): number | null {
+  const width = video.videoWidth;
+  const height = video.videoHeight;
+  if (!width || !height) return null;
+  return Math.min(1, MAX_FRAME_DIMENSION / Math.max(width, height));
+}
+
+// no manual rotation; allow ZXing to rotate internally
 
 async function selectFrontCamera(fallbackFacingMode: "user" | "environment"): Promise<MediaTrackConstraints> {
   const selectByLabel = async (): Promise<MediaTrackConstraints | null> => {
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
-      const match = devices.find(
-        (device) => device.kind === "videoinput" && device.label.trim() === TARGET_CAMERA_LABEL,
+      const lower = (s: string) => s.toLowerCase();
+      const isFrontLabel = (l: string) =>
+        /front|facetime|truedepth|user/.test(lower(l));
+      const frontDevices = devices.filter(
+        (d) => d.kind === "videoinput" && d.label && isFrontLabel(d.label),
+      );
+      const match = frontDevices[0] ?? devices.find(
+        (d) => d.kind === "videoinput" && d.label.trim() === TARGET_CAMERA_LABEL,
       );
 
       if (match) {
         return {
           deviceId: { exact: match.deviceId },
           facingMode: { ideal: "user" },
+          advanced: ADVANCED_VIDEO_SETTINGS,
           ...BASE_VIDEO_CONSTRAINTS,
         };
       }
@@ -72,10 +121,10 @@ async function selectFrontCamera(fallbackFacingMode: "user" | "environment"): Pr
 
   return {
     facingMode: { ideal: fallbackFacingMode },
+    advanced: ADVANCED_VIDEO_SETTINGS,
     ...BASE_VIDEO_CONSTRAINTS,
   };
 }
-
 
 export function useBarcodeScanner(
   options: UseBarcodeScannerOptions = {},
@@ -83,38 +132,208 @@ export function useBarcodeScanner(
   const { onScan, facingMode = "user", debounceMs = 1200 } = options;
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const readerRef = useRef<BrowserMultiFormatReader | null>(null);
-  const controlsRef = useRef<IScannerControls | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const canvasContextRef = useRef<CanvasRenderingContext2D | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const decodingRef = useRef(false);
   const lastScanRef = useRef<{ value: string; timestamp: number } | null>(null);
+  const debugSampleRef = useRef(0);
+  const lastAttemptAtRef = useRef<number | null>(null);
+  const lastDecodeAtRef = useRef(0);
+  const useBarcodeDetectorRef = useRef(false);
+  const barcodeDetectorRef = useRef<BarcodeDetector | null>(null);
 
   const [status, setStatus] = useState<ScannerStatus>("idle");
   const statusRef = useRef<ScannerStatus>("idle");
   const attemptCounterRef = useRef(0);
   const [errorMessage, setErrorMessage] = useState<string | undefined>(undefined);
 
-  const stop = useCallback(() => {
-    controlsRef.current?.stop();
-    controlsRef.current = null;
-
-    readerRef.current = null;
-
-    if (videoRef.current?.srcObject instanceof MediaStream) {
-      videoRef.current.srcObject.getTracks().forEach((track) => track.stop());
-      videoRef.current.srcObject = null;
+  const cleanupMedia = useCallback(() => {
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
     }
+    decodingRef.current = false;
 
+    const video = videoRef.current;
+    if (video?.srcObject instanceof MediaStream) {
+      video.srcObject.getTracks().forEach((track) => track.stop());
+      video.srcObject = null;
+    }
+  }, []);
+
+  const stop = useCallback(() => {
+    cleanupMedia();
     attemptCounterRef.current = 0;
     console.log("[barcode] Scanner stopped");
     statusRef.current = "idle";
     setStatus("idle");
-  }, [setStatus]);
+  }, [cleanupMedia]);
+
+  useEffect(() => {
+    return () => {
+      cleanupMedia();
+    };
+  }, [cleanupMedia]);
+
+  const decodeCurrentFrame = useCallback(async () => {
+    const video = videoRef.current;
+    if (!video) {
+      return;
+    }
+
+    if (!canvasRef.current) {
+      canvasRef.current = document.createElement("canvas");
+    }
+
+    if (!canvasContextRef.current) {
+      const context = canvasRef.current.getContext("2d", { willReadFrequently: true });
+      if (!context) {
+        console.error("[barcode] Unable to create canvas context for decoding");
+        return;
+      }
+      context.imageSmoothingEnabled = false;
+      canvasContextRef.current = context;
+    }
+
+    const context = canvasContextRef.current;
+    const scale = calculateScale(video);
+    if (scale == null) return;
+
+    const vWidth = video.videoWidth;
+    const vHeight = video.videoHeight;
+    const roiSrcHeight = Math.max(1, Math.round(vHeight * ROI_HEIGHT_FRACTION));
+    const roiSrcY = Math.max(0, Math.round((vHeight - roiSrcHeight) / 2));
+    const outputWidth = Math.max(1, Math.round(vWidth * scale));
+    const outputHeight = Math.max(1, Math.round(roiSrcHeight * scale));
+
+    if (debugSampleRef.current < MAX_DEBUG_SAMPLES) {
+      console.debug("[barcode] Decoding frame", {
+        videoDimensions: { width: vWidth, height: vHeight },
+        outputDimensions: { width: outputWidth, height: outputHeight },
+      });
+    }
+    if (
+      canvasRef.current.width !== outputWidth ||
+      canvasRef.current.height !== outputHeight
+    ) {
+      canvasRef.current.width = outputWidth;
+      canvasRef.current.height = outputHeight;
+    }
+
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.clearRect(0, 0, outputWidth, outputHeight);
+    // Draw central ROI band only
+    context.drawImage(
+      video,
+      0,
+      roiSrcY,
+      vWidth,
+      roiSrcHeight,
+      0,
+      0,
+      outputWidth,
+      outputHeight,
+    );
+
+    // Fast path: BarcodeDetector if supported for Code 128
+    if (useBarcodeDetectorRef.current && barcodeDetectorRef.current) {
+      try {
+        const results = await barcodeDetectorRef.current.detect(canvasRef.current);
+        const match = results.find((r) => (r.format ?? "").toLowerCase().includes("code_128"));
+        const raw = (match?.rawValue ?? "").trim();
+        if (raw) {
+          const now = Date.now();
+          const last = lastScanRef.current;
+          if (!last || last.value !== raw || now - last.timestamp >= debounceMs) {
+            lastScanRef.current = { value: raw, timestamp: now };
+            attemptCounterRef.current = 0;
+            console.log("[barcode] Detected via BarcodeDetector", { value: raw });
+            onScan?.(raw);
+            return;
+          }
+        }
+      } catch (e) {
+        // On failure, fall back to ZXing below in the same frame
+        if (debugSampleRef.current < MAX_DEBUG_SAMPLES) {
+          console.debug("[barcode] BarcodeDetector error; falling back to ZXing", e);
+        }
+      }
+    }
+
+    // ZXing fallback
+    let readResults: ReadResult[] = [];
+    let imageData: ImageData | null = null;
+    try {
+      imageData = context.getImageData(0, 0, outputWidth, outputHeight);
+    } catch (e) {
+      console.warn("[barcode] getImageData failed", e);
+      return;
+    }
+    try {
+      readResults = await readBarcodes(imageData, ZXING_OPTIONS);
+    } catch (error) {
+      if (debugSampleRef.current < MAX_DEBUG_SAMPLES) {
+        console.debug("[barcode] ZXing decode error", error);
+      }
+      readResults = [];
+    }
+
+    if (readResults.length === 0) {
+      return;
+    }
+
+    const [firstResult] = readResults;
+    const value = firstResult.text?.trim();
+    if (!value) {
+      return;
+    }
+
+    const now = Date.now();
+    const last = lastScanRef.current;
+    if (last && last.value === value && now - last.timestamp < debounceMs) {
+      if (debugSampleRef.current < MAX_DEBUG_SAMPLES) {
+        console.debug("[barcode] Duplicate scan ignored", {
+          value,
+          sinceLast: now - last.timestamp,
+        });
+      }
+      return;
+    }
+
+    lastScanRef.current = { value, timestamp: now };
+    attemptCounterRef.current = 0;
+    console.log("[barcode] Successfully detected barcode", {
+      value,
+      format: firstResult.format,
+    });
+    onScan?.(value);
+    return;
+  
+    attemptCounterRef.current += 1;
+    lastAttemptAtRef.current = Date.now();
+    if (attemptCounterRef.current % 20 === 0) {
+      const v = videoRef.current;
+      let dims: { width: number; height: number } | null = null;
+      if (v) {
+        dims = { width: v!.videoWidth, height: v!.videoHeight };
+      }
+      console.log("[barcode] Scanning… no barcode yet", {
+        attemptsSinceLast: attemptCounterRef.current,
+        lastAttemptAt: lastAttemptAtRef.current,
+        videoDimensions: dims,
+      });
+    }
+    if (debugSampleRef.current < MAX_DEBUG_SAMPLES) debugSampleRef.current += 1;
+  }, [debounceMs, onScan]);
 
   const start = useCallback(async () => {
     if (statusRef.current === "scanning" || statusRef.current === "requesting") {
       return;
     }
 
-    if (!videoRef.current) {
+    const video = videoRef.current;
+    if (!video) {
       throw new Error("Video element is not ready");
     }
 
@@ -131,99 +350,96 @@ export function useBarcodeScanner(
       setStatus("requesting");
       setErrorMessage(undefined);
 
+      await ensureZXingModuleReady();
+
       const videoConstraints = await selectFrontCamera(facingMode);
       console.log("[barcode] Starting scanner with constraints", videoConstraints);
-      const hints = new Map();
-      hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.CODE_128]);
-      hints.set(DecodeHintType.TRY_HARDER, true);
-      hints.set(DecodeHintType.ASSUME_GS1, true);
-      const reader = new BrowserMultiFormatReader(hints);
-      readerRef.current = reader;
 
-      controlsRef.current = await reader.decodeFromConstraints(
-        {
-          video: videoConstraints,
-          audio: false,
-        },
-        videoRef.current,
-        (result, error) => {
-          if (result) {
-            const value = result.getText();
-            if (!value) {
-              return;
-            }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: videoConstraints,
+        audio: false,
+      });
 
-            const now = Date.now();
-            const last = lastScanRef.current;
+      const [track] = stream.getVideoTracks();
+      if (track?.applyConstraints) {
+        try {
+          await track.applyConstraints({ advanced: ADVANCED_VIDEO_SETTINGS });
+        } catch (constraintError) {
+          console.warn("[barcode] Unable to apply advanced camera constraints", constraintError);
+        }
+      }
 
-            if (last && last.value === value && now - last.timestamp < debounceMs) {
-              console.debug("[barcode] Duplicate scan ignored", {
-                value,
-                sinceLast: now - last.timestamp,
-              });
-              return;
-            }
+      video.srcObject = stream;
+      // iOS Safari specific hints
+      video.playsInline = true;
+      // Avoid echo/auto-play issues
+      video.muted = true;
+      await video.play().catch(() => undefined);
 
-            lastScanRef.current = { value, timestamp: now };
-            attemptCounterRef.current = 0;
-            console.log("[barcode] Successfully detected barcode", {
-              value,
-              format: "CODE_128",
-            });
-            onScan?.(value);
+      attemptCounterRef.current = 0;
+      lastDecodeAtRef.current = 0;
+
+      // Determine if BarcodeDetector is available for Code 128
+      useBarcodeDetectorRef.current = false;
+      barcodeDetectorRef.current = null;
+      try {
+        const BD = (globalThis as unknown as { BarcodeDetector?: BarcodeDetectorConstructor })
+          .BarcodeDetector;
+        if (BD) {
+          const supported = BD.getSupportedFormats ? await BD.getSupportedFormats() : [];
+          const supportedLower = supported.map((s: string) => s.toLowerCase());
+          const code128 = supportedLower.find((s) => s.includes("code_128") || s.includes("code-128"));
+          if (code128) {
+            const detector = new BD({ formats: [code128] });
+            barcodeDetectorRef.current = detector;
+            useBarcodeDetectorRef.current = true;
+            console.log("[barcode] Using BarcodeDetector fast path", { format: code128 });
           }
+        }
+      } catch {
+        // Fallback to ZXing
+        useBarcodeDetectorRef.current = false;
+        barcodeDetectorRef.current = null;
+      }
 
-          if (error && statusRef.current !== "error") {
-            const name = typeof error === "object" && error && "name" in error
-              ? String((error as { name: unknown }).name)
-              : undefined;
-            const message =
-              typeof error === "object" && error && "message" in error
-                ? String((error as { message: unknown }).message)
-                : String(error);
-
-            const isExpectedMiss =
-              name === "NotFoundException" ||
-              name === "ChecksumException" ||
-              name === "FormatException" ||
-              message.includes("No MultiFormat Readers");
-
-            if (isExpectedMiss) {
-              attemptCounterRef.current += 1;
-              if (attemptCounterRef.current % 15 === 0) {
-                console.log("[barcode] Scanning… no barcode yet", {
-                  attemptsSinceLast: attemptCounterRef.current,
-                });
-              }
-              return;
-            }
-
-            console.error("[barcode] Scanner error", error);
-          }
-        },
-      );
+      const loop = async () => {
+        rafRef.current = requestAnimationFrame(loop);
+        if (statusRef.current !== "scanning") {
+          return;
+        }
+        if (!videoRef.current || videoRef.current.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+          return;
+        }
+        if (decodingRef.current) {
+          return;
+        }
+        const now = Date.now();
+        if (now - lastDecodeAtRef.current < DECODE_INTERVAL_MS) {
+          return;
+        }
+        lastDecodeAtRef.current = now;
+        decodingRef.current = true;
+        try {
+          await decodeCurrentFrame();
+        } finally {
+          decodingRef.current = false;
+        }
+      };
 
       statusRef.current = "scanning";
       console.log("[barcode] Scanner ready and watching for code 128 barcodes");
       setStatus("scanning");
+      loop();
     } catch (error) {
-      console.error(error);
+      console.error("[barcode] Failed to start scanner", error);
+      cleanupMedia();
       setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "Unable to start camera stream",
+        error instanceof Error ? error.message : "Unable to start camera stream",
       );
       statusRef.current = "error";
       setStatus("error");
-      stop();
     }
-  }, [debounceMs, facingMode, onScan, stop]);
-
-  useEffect(() => {
-    return () => {
-      stop();
-    };
-  }, [stop]);
+  }, [cleanupMedia, decodeCurrentFrame, facingMode]);
 
   return {
     videoRef,
