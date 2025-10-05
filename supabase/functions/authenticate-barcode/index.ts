@@ -97,20 +97,36 @@ Deno.serve(async (req) => {
     const existingProfile = identifierLookup.data?.profiles ?? null;
     const profileId = existingProfile?.id ?? identifierLookup.data?.profile_id ?? null;
 
-    const userLookup = await supabaseAdmin.auth.admin.getUserByEmail(syntheticEmail);
-
-    if (userLookup.error && userLookup.error.message !== "User not found") {
-      throw userLookup.error;
-    }
-
+    // Resolve display name with preference order
     const resolvedDisplayName =
       preferredDisplayName ??
-      (existingProfile?.display_name ?? (userLookup.data.user?.user_metadata?.display_name as string | undefined)) ??
+      existingProfile?.display_name ??
       `Student ${normalizedBarcode.slice(-4).padStart(4, "0")}`;
 
-    const user = userLookup.data.user
-      ? userLookup.data.user
-      : (await (async () => {
+    // Helper to find a user by email via pagination (v2 SDK does not expose getUserByEmail)
+    async function findUserByEmail(email: string) {
+      try {
+        const list = await supabaseAdmin.auth.admin.listUsers({ page: 1, perPage: 1000 });
+        const found = list.data?.users?.find((u) => (u.email ?? "").toLowerCase() === email.toLowerCase());
+        return found ?? null;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    const user = existingProfile
+      ? // If we already have a profile record, assume corresponding auth user exists with the same id
+        await (async () => {
+          const existingId = existingProfile.id;
+          const byId = await supabaseAdmin.auth.admin.getUserById(existingId).catch(() => null);
+          if (byId && !("error" in byId)) {
+            // @ts-ignore – runtime structure has data.user
+            return byId.data?.user ?? null;
+          }
+          // Fallback: try locate by email
+          const byEmail = await findUserByEmail(syntheticEmail);
+          if (byEmail) return byEmail;
+          // As last resort, create the user
           const created = await supabaseAdmin.auth.admin.createUser({
             email: syntheticEmail,
             email_confirm: true,
@@ -120,13 +136,32 @@ Deno.serve(async (req) => {
               identifier_type: IDENTIFIER_TYPE,
             },
           });
-
           if (created.error) {
             throw created.error;
           }
-
           return created.data.user;
-        })());
+        })()
+      : // No profile yet – create or fetch user by email
+        await (async () => {
+          const created = await supabaseAdmin.auth.admin.createUser({
+            email: syntheticEmail,
+            email_confirm: true,
+            user_metadata: {
+              display_name: resolvedDisplayName,
+              barcode: normalizedBarcode,
+              identifier_type: IDENTIFIER_TYPE,
+            },
+          });
+          if (!created.error && created.data?.user) {
+            return created.data.user;
+          }
+          // If user already exists, fall back to list and find by email
+          const existing = await findUserByEmail(syntheticEmail);
+          if (existing) return existing;
+          // If still not found, bubble up the original error
+          if (created.error) throw created.error;
+          throw new Error("Unable to resolve or create user");
+        })();
 
     if (!user) {
       throw new Error("Failed to resolve Supabase auth user");
