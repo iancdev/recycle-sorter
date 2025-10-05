@@ -88,6 +88,10 @@ class SerialESP32Client:
         self._timeout = timeout
         self._serial = None
         self._last_port = None
+        # Incremental read buffer + latest parsed state cache
+        self._read_buffer = bytearray()
+        self._last_state_line = None  # type: ignore[assignment]
+        self._last_state_tuple = (False, False)
 
     @classmethod
     def from_env(cls):
@@ -134,6 +138,14 @@ class SerialESP32Client:
             self._last_port = port
             print(f"[ESP32] Opened serial connection on {port} at {self._baudrate} baud.")
             time.sleep(2.0)  # allow ESP32 time to reset after connection
+            # Clear any boot noise or stale bytes from device reset
+            try:
+                if hasattr(self._serial, "reset_input_buffer"):
+                    self._serial.reset_input_buffer()
+                else:
+                    self._serial.flushInput()
+            except Exception:
+                pass
         except serial.SerialException as exc:
             raise RuntimeError(f"Failed to open serial port '{port}': {exc}") from exc
 
@@ -169,6 +181,64 @@ class SerialESP32Client:
             return raw.decode("utf-8", errors="replace").strip()
         except serial.SerialException as exc:
             raise RuntimeError(f"Failed to read from ESP32 over serial: {exc}") from exc
+
+    def drain_and_capture_state(self):
+        """Drain any available bytes and capture the latest complete state line.
+
+        Accumulates into an internal buffer and extracts complete lines. For each
+        complete line, if it matches the state pattern, update the cached
+        (isMoving, isTriggered) tuple. Keeps partial line bytes for the next call.
+        """
+        connection = self._ensure_connection()
+        try:
+            available = getattr(connection, "in_waiting", 0) or 0
+        except Exception:
+            available = 0
+
+        if available <= 0:
+            return
+
+        try:
+            chunk = connection.read(available)
+        except serial.SerialException:
+            return
+
+        if not chunk:
+            return
+
+        self._read_buffer += chunk
+        try:
+            buffer_text = self._read_buffer.decode("utf-8", errors="replace")
+        except Exception:
+            # If decoding fails unexpectedly, reset buffer
+            self._read_buffer.clear()
+            return
+
+        last_nl = buffer_text.rfind("\n")
+        if last_nl == -1:
+            # No complete line yet; keep buffer for next time
+            return
+
+        complete_block = buffer_text[: last_nl + 1]
+        remainder_text = buffer_text[last_nl + 1 :]
+        self._read_buffer = bytearray(remainder_text.encode("utf-8", errors="ignore"))
+
+        # Process complete lines and keep last valid state
+        for line in complete_block.splitlines():
+            text = line.strip()
+            if not text:
+                continue
+            m = _STATE_RE.search(text)
+            if m:
+                a, b = m.group(1), m.group(2)
+                self._last_state_line = text
+                self._last_state_tuple = (a == "1", b == "1")
+        return
+
+    def get_latest_state(self):
+        """Return the latest parsed (isMoving, isTriggered) after draining input."""
+        self.drain_and_capture_state()
+        return self._last_state_tuple
 
     def reset_input_buffer(self):
         """Clear any pending bytes from the serial input buffer."""
@@ -322,32 +392,19 @@ def publish_classification(category_slug, confidence=None, raw_payload=None):
 _STATE_RE = re.compile(r"\(?\s*([01])\s*[,\s]\s*([01])\s*\)?")
 
 def currentState():
-    """Read and parse device state as (isMoving, isTriggered) booleans.
+    """Return latest device state (isMoving, isTriggered) using captured lines.
 
-    Expected formats: "0,1", "(0,1)", or with whitespace. Returns (False, True) for "0,1".
-    Unparseable or empty lines return (False, False) by default.
+    Drains serial input to the most recent complete line and returns the last
+    valid parsed tuple. If nothing has been parsed yet, returns (False, False).
     """
     try:
-        line = get_serial_client().read_line()
+        state = get_serial_client().get_latest_state()
+        if isinstance(state, tuple) and len(state) == 2:
+            return bool(state[0]), bool(state[1])
+        return False, False
     except Exception as exc:  # pylint: disable=broad-except
         print(f"[ESP32] Read error: {exc}")
         return False, False
-
-    if not line:
-        return False, False
-
-    m = _STATE_RE.search(line)
-    if not m:
-        # Fallback: try to split on comma and coerce
-        parts = [p.strip() for p in line.strip("() ").split(",")]
-        if len(parts) >= 2 and all(p in ("0", "1") for p in parts[:2]):
-            a, b = parts[0], parts[1]
-            return (a == "1"), (b == "1")
-        print(f"[ESP32] Unrecognized state '{line}', defaulting to (0,0)")
-        return False, False
-
-    a, b = m.group(1), m.group(2)
-    return (a == "1"), (b == "1")
     
 
 def webcamFeed(*, max_frames=None, delay_seconds=0, show_window=False):
@@ -409,11 +466,6 @@ def webcamFeed(*, max_frames=None, delay_seconds=0, show_window=False):
                     break
 
             # Wait for ultrasonic trigger from serial: (isMoving, isTriggered)
-            # Flush any stale lines so we react to a fresh state update
-            try:
-                get_serial_client().reset_input_buffer()
-            except Exception as exc:  # pylint: disable=broad-except
-                print(f"[ESP32] Failed to flush input buffer: {exc}")
             isMoving, isTriggered = currentState()
             while not isTriggered:
                 # Keep UI responsive and avoid busy-wait
