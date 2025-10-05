@@ -25,7 +25,7 @@ interface UseBarcodeScannerResult {
 }
 
 const TARGET_CAMERA_LABEL = "Front Camera";
-const MAX_FRAME_DIMENSION = 1280;
+const MAX_FRAME_DIMENSION = 1920;
 const DECODE_INTERVAL_MS = 80; // ~12.5 fps
 const MAX_DEBUG_SAMPLES = 10;
 
@@ -45,7 +45,7 @@ const ZXING_OPTIONS: ReaderOptions = {
   formats: ["Code128"],
   tryHarder: true,
   tryRotate: true,
-  tryInvert: false,
+  tryInvert: true,
   tryDownscale: false,
   maxNumberOfSymbols: 1,
   binarizer: "LocalAverage",
@@ -227,8 +227,7 @@ export function useBarcodeScanner(
     if (useBarcodeDetectorRef.current && barcodeDetectorRef.current) {
       try {
         const results = await barcodeDetectorRef.current.detect(canvasRef.current);
-        const match = results.find((r) => (r.format ?? "").toLowerCase().includes("code_128"));
-        const raw = (match?.rawValue ?? "").trim();
+        const raw = (results[0]?.rawValue ?? "").trim();
         if (raw) {
           const now = Date.now();
           const last = lastScanRef.current;
