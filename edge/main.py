@@ -3,6 +3,8 @@ import os
 import time
 import uuid
 import re
+import threading
+from collections import deque
 
 import cv2
 import requests
@@ -88,10 +90,14 @@ class SerialESP32Client:
         self._timeout = timeout
         self._serial = None
         self._last_port = None
-        # Incremental read buffer + latest parsed state cache
-        self._read_buffer = bytearray()
-        self._last_state_line = None  # type: ignore[assignment]
+        # Background reader + caches
+        self._reader_thread = None
+        self._stop_event = threading.Event()
+        self._state_lock = threading.Lock()
+        self._io_lock = threading.Lock()
+        self._last_state_line = None
         self._last_state_tuple = (False, False)
+        self._lines_buffer = deque(maxlen=200)
 
     @classmethod
     def from_env(cls):
@@ -146,6 +152,8 @@ class SerialESP32Client:
                     self._serial.flushInput()
             except Exception:
                 pass
+            # Start reader thread if not running
+            self._start_reader()
         except serial.SerialException as exc:
             raise RuntimeError(f"Failed to open serial port '{port}': {exc}") from exc
 
@@ -155,9 +163,10 @@ class SerialESP32Client:
         connection = self._ensure_connection()
         payload = f"{command_value}\n".encode("utf-8")
         try:
-            connection.reset_output_buffer()
-            connection.write(payload)
-            connection.flush()
+            with self._io_lock:
+                connection.reset_output_buffer()
+                connection.write(payload)
+                connection.flush()
             port_source = "override" if self._com_override else "auto"
             print(
                 f"[ESP32] Command '{command_value}' sent over serial"
@@ -182,63 +191,45 @@ class SerialESP32Client:
         except serial.SerialException as exc:
             raise RuntimeError(f"Failed to read from ESP32 over serial: {exc}") from exc
 
-    def drain_and_capture_state(self):
-        """Drain any available bytes and capture the latest complete state line.
+    def _reader_loop(self):
+        conn = self._ensure_connection()
+        while not self._stop_event.is_set():
+            try:
+                raw = conn.readline()
+                if not raw:
+                    # Timeout reached; loop
+                    continue
+                text = raw.decode("utf-8", errors="replace").strip()
+                if not text:
+                    continue
+                with self._state_lock:
+                    self._lines_buffer.append(text)
+                    m = _STATE_RE.search(text)
+                    if m:
+                        a, b = m.group(1), m.group(2)
+                        self._last_state_line = text
+                        self._last_state_tuple = (a == "1", b == "1")
+            except Exception:
+                # Soft-fail; brief sleep to avoid tight loop on error
+                time.sleep(0.02)
 
-        Accumulates into an internal buffer and extracts complete lines. For each
-        complete line, if it matches the state pattern, update the cached
-        (isMoving, isTriggered) tuple. Keeps partial line bytes for the next call.
-        """
-        connection = self._ensure_connection()
-        try:
-            available = getattr(connection, "in_waiting", 0) or 0
-        except Exception:
-            available = 0
-
-        if available <= 0:
+    def _start_reader(self):
+        if self._reader_thread and self._reader_thread.is_alive():
             return
-
-        try:
-            chunk = connection.read(available)
-        except serial.SerialException:
-            return
-
-        if not chunk:
-            return
-
-        self._read_buffer += chunk
-        try:
-            buffer_text = self._read_buffer.decode("utf-8", errors="replace")
-        except Exception:
-            # If decoding fails unexpectedly, reset buffer
-            self._read_buffer.clear()
-            return
-
-        last_nl = buffer_text.rfind("\n")
-        if last_nl == -1:
-            # No complete line yet; keep buffer for next time
-            return
-
-        complete_block = buffer_text[: last_nl + 1]
-        remainder_text = buffer_text[last_nl + 1 :]
-        self._read_buffer = bytearray(remainder_text.encode("utf-8", errors="ignore"))
-
-        # Process complete lines and keep last valid state
-        for line in complete_block.splitlines():
-            text = line.strip()
-            if not text:
-                continue
-            m = _STATE_RE.search(text)
-            if m:
-                a, b = m.group(1), m.group(2)
-                self._last_state_line = text
-                self._last_state_tuple = (a == "1", b == "1")
-        return
+        self._stop_event.clear()
+        self._reader_thread = threading.Thread(target=self._reader_loop, name="SerialReader", daemon=True)
+        self._reader_thread.start()
 
     def get_latest_state(self):
         """Return the latest parsed (isMoving, isTriggered) after draining input."""
-        self.drain_and_capture_state()
-        return self._last_state_tuple
+        with self._state_lock:
+            return self._last_state_tuple
+
+    def get_recent_lines(self, n=10):
+        with self._state_lock:
+            if n <= 0:
+                return []
+            return list(deque(self._lines_buffer, maxlen=n))
 
     def reset_input_buffer(self):
         """Clear any pending bytes from the serial input buffer."""
@@ -410,7 +401,7 @@ def currentState():
 def webcamFeed(*, max_frames=None, delay_seconds=0, show_window=False):
     """Continuously read frames from webcam, classify, and command ESP32."""
 
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
     if not cap.isOpened():
         raise RuntimeError("Unable to open webcam (device index 0).")
 
