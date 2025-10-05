@@ -20,6 +20,17 @@ from google.genai import types
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or ""
 
+# Optional Roboflow backend configuration (from local 'image detect.py')
+ROBOFLOW_API_KEY = os.environ.get("ROBOFLOW_API_KEY") or ""
+ROBOFLOW_MODEL_URL = (
+    os.environ.get("ROBOFLOW_MODEL_URL")
+    or "https://app.roboflow.com/ftc16031/workflows/edit/detect-and-classify"
+)
+try:
+    ROBOFLOW_CONFIDENCE = int(os.environ.get("ROBOFLOW_CONFIDENCE") or "40")
+except ValueError:
+    ROBOFLOW_CONFIDENCE = 40
+
 SUPABASE_URL = (
     os.environ.get("SUPABASE_URL")
     or os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
@@ -371,14 +382,62 @@ def _image_to_part(image, mime_type="image/jpeg"):
 
     return types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
 
-def recognizeImage(image):
-    """
-    Recognize image provided, and returns category ID.
-    """ 
-    print(f"[Gemini] Recognizing image...")
-    if not GEMINI_API_KEY:
-        raise EnvironmentError("GEMINI_API_KEY is not set in the environment.")
+def _encode_jpeg(image):
+    """Encode an image/frame to JPEG bytes."""
+    if isinstance(image, (bytes, bytearray, memoryview)):
+        return bytes(image)
+    success, buffer = cv2.imencode(".jpg", image)
+    if not success:
+        raise ValueError("Failed to encode image frame to JPEG for request.")
+    return buffer.tobytes()
 
+def _label_to_category_id(label: str) -> int:
+    """Map a free-form label to our category IDs (1: can, 2: bottle, 3: garbage)."""
+    if not label:
+        return 3
+    norm = label.strip().lower()
+    # Common heuristics
+    if "can" in norm or "cans" in norm:
+        return 1
+    if "bottle" in norm or "bottles" in norm:
+        return 2
+    return 3
+
+def recognizeImage(image):
+    """Recognize the image via Roboflow workflow and return category ID."""
+    if not ROBOFLOW_API_KEY:
+        raise EnvironmentError("ROBOFLOW_API_KEY must be set for Roboflow recognition.")
+
+    image_bytes = _encode_jpeg(image)
+    url = f"{ROBOFLOW_MODEL_URL}?api_key={ROBOFLOW_API_KEY}&confidence={ROBOFLOW_CONFIDENCE}"
+    print(f"[Roboflow] Sending image for detection (confidence>={ROBOFLOW_CONFIDENCE})")
+    try:
+        files = {"file": ("frame.jpg", image_bytes, "image/jpeg")}
+        response = requests.post(url, files=files, timeout=20)
+        response.raise_for_status()
+        result = response.json()
+    except Exception as exc:
+        print(f"[Roboflow] Request failed: {exc}")
+        return 3
+
+    predictions = result.get("predictions") or result.get("results") or []
+    if not isinstance(predictions, list):
+        predictions = predictions.get("predictions", []) if isinstance(predictions, dict) else []
+
+    if not predictions:
+        print("[Roboflow] No predictions; defaulting to garbage (3)")
+        return 3
+
+    best = max(predictions, key=lambda p: p.get("confidence", 0))
+    label = best.get("class") or best.get("label") or ""
+    category_id = _label_to_category_id(label)
+    print(f"[Roboflow] Top label '{label}' ⇒ category ID {category_id}")
+    return category_id
+
+def recognizeImage_gemini(image):
+    """Recognize image and return category ID using Gemini."""
+
+    print("[Gemini] Recognizing image...")
     if not GEMINI_API_KEY:
         raise EnvironmentError("GEMINI_API_KEY must be set for edge recognition.")
 
@@ -395,19 +454,19 @@ def recognizeImage(image):
         ),
     ]
     generate_content_config = types.GenerateContentConfig(
-        thinking_config = types.ThinkingConfig(
+        thinking_config=types.ThinkingConfig(
             thinking_budget=0,
         ),
         response_mime_type="application/json",
         response_schema=genai.types.Schema(
-            type = genai.types.Type.OBJECT,
-            required = ["recognized_category", "recognized_category_id"],
-            properties = {
+            type=genai.types.Type.OBJECT,
+            required=["recognized_category", "recognized_category_id"],
+            properties={
                 "recognized_category": genai.types.Schema(
-                    type = genai.types.Type.STRING,
+                    type=genai.types.Type.STRING,
                 ),
                 "recognized_category_id": genai.types.Schema(
-                    type = genai.types.Type.INTEGER,
+                    type=genai.types.Type.INTEGER,
                 ),
             },
         ),
