@@ -43,6 +43,8 @@ const REALTIME_STATUS_LABELS = {
 export default function KioskPage(): ReactElement {
   const [isClosing, setIsClosing] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
+  const [showStartedOverlay, setShowStartedOverlay] = useState(false);
+  const [showExpiredOverlay, setShowExpiredOverlay] = useState(false);
 
   const reset = useKioskStore((state) => state.reset);
   const status = useKioskStore((state) => state.status);
@@ -101,6 +103,8 @@ export default function KioskPage(): ReactElement {
         sessionId: payload.session.id,
       });
       useKioskStore.getState().setReady(payload);
+      setShowStartedOverlay(true);
+      window.setTimeout(() => setShowStartedOverlay(false), 1500);
     } catch (error) {
       console.error("[barcode] Failed to authenticate barcode", error);
       const message =
@@ -244,6 +248,7 @@ export default function KioskPage(): ReactElement {
         setCountdown(0);
         if (!closed) {
           closed = true;
+          setShowExpiredOverlay(true);
           handleCloseSession().catch((error) => {
             console.error("Failed to auto-close session", error);
           });
@@ -279,10 +284,43 @@ export default function KioskPage(): ReactElement {
             </button>
             <button
               type="button"
+              onClick={() => useKioskStore.getState().touchActivity()}
+              className="rounded-full border border-sky-400/40 bg-sky-500/10 px-5 py-2 text-xs font-semibold uppercase tracking-wide text-sky-200 transition hover:bg-sky-500/20"
+            >
+              Extend session
+            </button>
+            <button
+              type="button"
               onClick={switchCamera}
               className="rounded-full border border-neutral-700 bg-neutral-800 px-5 py-2 text-xs font-semibold uppercase tracking-wide text-neutral-200 transition hover:bg-neutral-700"
             >
               Switch camera
+            </button>
+          </div>
+        </div>
+      )}
+      {showStartedOverlay && (
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-neutral-950/70 px-8 text-center">
+          <h2 className="text-2xl font-semibold text-emerald-200">Session started</h2>
+          <p className="text-sm text-neutral-200">You can begin scanning items.</p>
+        </div>
+      )}
+      {showExpiredOverlay && (
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-neutral-950/90 px-8 text-center">
+          <h2 className="text-2xl font-semibold text-neutral-100">Session expired</h2>
+          <p className="max-w-md text-sm text-neutral-300">
+            Your session expired due to inactivity. Tap below to start a new session.
+          </p>
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                setShowExpiredOverlay(false);
+                reset();
+              }}
+              className="rounded-full border border-neutral-700 bg-neutral-800 px-5 py-2 text-xs font-semibold uppercase tracking-wide text-neutral-200 transition hover:bg-neutral-700"
+            >
+              Start new session
             </button>
           </div>
         </div>
@@ -374,6 +412,15 @@ export default function KioskPage(): ReactElement {
                 >
                   Reset kiosk
                 </button>
+                {status === "ready" && (
+                  <button
+                    type="button"
+                    onClick={() => useKioskStore.getState().touchActivity()}
+                    className="rounded-full border border-sky-400/40 bg-sky-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-sky-200 transition hover:bg-sky-500/20"
+                  >
+                    Extend session
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={switchCamera}
