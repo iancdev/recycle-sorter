@@ -197,6 +197,7 @@ export default function KioskPage(): ReactElement {
   }, [profile?.id, session?.status, supabase, setRecentSessions]);
 
   const showErrorOverlay = status === "error";
+  const showEndedOverlay = Boolean(session && session.status && session.status !== "active");
 
   const handleCloseSession = useCallback(async () => {
     if (isClosing) {
@@ -209,15 +210,20 @@ export default function KioskPage(): ReactElement {
       return;
     }
 
+    // If session already not active, reset gracefully without error
+    if (activeSession.status && activeSession.status !== "active") {
+      store.reset();
+      return;
+    }
+
     setIsClosing(true);
     try {
       await closeSession({ sessionId: activeSession.id });
       store.reset();
     } catch (error) {
-      console.error(error);
-      const message =
-        error instanceof Error ? error.message : "Unable to close session";
-      store.setError(message);
+      console.warn("Close session failed; resetting kiosk", error);
+      // Treat failures as already-closed and reset without showing error overlay
+      store.reset();
     } finally {
       setIsClosing(false);
     }
@@ -277,6 +283,23 @@ export default function KioskPage(): ReactElement {
               className="rounded-full border border-neutral-700 bg-neutral-800 px-5 py-2 text-xs font-semibold uppercase tracking-wide text-neutral-200 transition hover:bg-neutral-700"
             >
               Switch camera
+            </button>
+          </div>
+        </div>
+      )}
+      {showEndedOverlay && (
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-neutral-950/90 px-8 text-center">
+          <h2 className="text-2xl font-semibold text-neutral-100">Session ended</h2>
+          <p className="max-w-md text-sm text-neutral-300">
+            Your previous session has been completed or expired. Start a new scan when ready.
+          </p>
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            <button
+              type="button"
+              onClick={reset}
+              className="rounded-full border border-neutral-700 bg-neutral-800 px-5 py-2 text-xs font-semibold uppercase tracking-wide text-neutral-200 transition hover:bg-neutral-700"
+            >
+              Start new session
             </button>
           </div>
         </div>
