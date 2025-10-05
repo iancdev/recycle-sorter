@@ -12,3 +12,4 @@ edge/launch.ps1
 # Ignore local Next.js outputs if created at root
 .next/
 
+/local/
