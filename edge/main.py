@@ -437,7 +437,62 @@ def _open_camera(index=0):
     except Exception:
         pass
     return cap
+def recognizeAndValidate(cap, image, *, retry_count=1, retry_sleep=0.05):
+    """Run Roboflow and Gemini; if mismatch, retry with a new frame once.
 
+    Returns a single category_id per policy:
+    - If results match on any attempt, return that category_id (Roboflow/Gemini agree).
+    - If mismatch persists after retry, return Gemini's result.
+    """
+    try:
+        rf1 = recognizeImage(image)
+    except Exception as exc:
+        print(f"[Validate] Roboflow failed on first attempt: {exc}")
+        rf1 = None
+    try:
+        gm1 = recognizeImage_gemini(image)
+    except Exception as exc:
+        print(f"[Validate] Gemini failed on first attempt: {exc}")
+        gm1 = None
+
+    if rf1 is not None and gm1 is not None:
+        if rf1 == gm1:
+            print(f"[Validate] Agreement on first attempt: {rf1}")
+            return rf1
+    elif rf1 is not None and gm1 is None:
+        # If Gemini failed entirely, return Roboflow
+        return rf1
+    elif gm1 is not None and rf1 is None:
+        return gm1
+
+    # Mismatch or both failed; retry once if allowed
+    if retry_count > 0:
+        time.sleep(max(0.0, retry_sleep))
+        ok, new_frame = cap.read()
+        frame2 = new_frame if ok else image
+        try:
+            rf2 = recognizeImage(frame2)
+        except Exception as exc:
+            print(f"[Validate] Roboflow failed on retry: {exc}")
+            rf2 = None
+        try:
+            gm2 = recognizeImage_gemini(frame2)
+        except Exception as exc:
+            print(f"[Validate] Gemini failed on retry: {exc}")
+            gm2 = None
+
+        if rf2 is not None and gm2 is not None:
+            if rf2 == gm2:
+                print(f"[Validate] Agreement on retry: {rf2}")
+                return rf2
+            # Still mismatch → prefer Gemini
+            print(f"[Validate] Mismatch persists; choosing Gemini: {gm2}")
+            return gm2
+        # If only one succeeded, return that one; else default to garbage (3)
+        return rf2 if rf2 is not None else (gm2 if gm2 is not None else 3)
+
+    # No retries configured and mismatch: prefer Gemini if present
+    return gm1 if gm1 is not None else (rf1 if rf1 is not None else 3)
 
 def webcamFeed(*, max_frames=None, delay_seconds=0, show_window=True):
     """Continuously read frames from webcam, classify, and command ESP32."""
@@ -519,8 +574,8 @@ def webcamFeed(*, max_frames=None, delay_seconds=0, show_window=True):
                 frame_to_use = frame3
             else:
                 frame_to_use = frame
-
-            category_id = recognizeImage(frame_to_use)
+            # Validate by cross-checking Roboflow and Gemini with one retry on mismatch
+            category_id = recognizeAndValidate(cap, frame_to_use, retry_count=1)
             category_slug = CATEGORY_ID_TO_SLUG.get(category_id, "garbage")
 
             raw_payload = {
