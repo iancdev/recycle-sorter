@@ -418,11 +418,39 @@ def _open_camera(index=0):
     latency by setting CAP_PROP_BUFFERSIZE to 1 when supported.
     """
     cap = None
+    backend_tried = []
     try:
-        # Prefer DirectShow on Windows for stability with USB cameras
-        cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
-        if not cap.isOpened():
-            cap.release()
+        if platform.system() == "Windows":
+            # Prefer MSMF first; fallback to DirectShow, then default
+            for backend in (getattr(cv2, "CAP_MSMF", 1400), cv2.CAP_DSHOW, 0):
+                backend_tried.append(backend)
+                try:
+                    c = cv2.VideoCapture(index, backend)
+                    if c.isOpened():
+                        # Try to set a common format to avoid black frames
+                        try:
+                            c.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+                        except Exception:
+                            pass
+                        # Optional: modest default resolution if supported
+                        try:
+                            c.set(cv2.CAP_PROP_FRAME_WIDTH, float(os.environ.get("CAMERA_WIDTH", 1280)))
+                            c.set(cv2.CAP_PROP_FRAME_HEIGHT, float(os.environ.get("CAMERA_HEIGHT", 720)))
+                        except Exception:
+                            pass
+                        cap = c
+                        break
+                    else:
+                        c.release()
+                except Exception:
+                    try:
+                        c.release()
+                    except Exception:
+                        pass
+            if cap is None:
+                cap = cv2.VideoCapture(index)
+        else:
+            # Non-Windows: default backend
             cap = cv2.VideoCapture(index)
     except Exception:
         if cap is not None:
@@ -467,6 +495,21 @@ class FrameGrabber:
         self._cap = _open_camera(self._index)
         if not self._cap or not self._cap.isOpened():
             raise RuntimeError("Unable to open webcam (device index 0).")
+        # Warm up: some Windows drivers output black frames initially
+        try:
+            warmup_tries = 20
+            while warmup_tries > 0:
+                ok, frame = self._cap.read()
+                if ok and frame is not None:
+                    with self._lock:
+                        self._latest = frame
+                        self._latest_ts = time.time()
+                        self._ok = True
+                    break
+                warmup_tries -= 1
+                time.sleep(0.02)
+        except Exception:
+            pass
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, name="FrameGrabber", daemon=True)
         self._thread.start()
