@@ -28,7 +28,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or ""
 ROBOFLOW_API_KEY = os.environ.get("ROBOFLOW_API_KEY") or ""
 ROBOFLOW_MODEL_URL = (
     os.environ.get("ROBOFLOW_MODEL_URL")
-    or "https://app.roboflow.com/ftc16031/workflows/edit/detect-and-classify"
+    or "https://api.roboflow.com/workflows/ftc16031/detect-and-classify"
 )
 try:
     ROBOFLOW_CONFIDENCE = int(os.environ.get("ROBOFLOW_CONFIDENCE") or "40")
@@ -727,6 +727,88 @@ def _encode_jpeg(image):
         raise ValueError("Failed to encode image frame to JPEG for request.")
     return buffer.tobytes()
 
+def _normalize_roboflow_url(url, api_key, confidence=None):
+    """Return a proper Roboflow inference URL.
+
+    - If a UI/editor URL is provided (app.roboflow.com/.../workflows/edit/<name>), convert it to
+      the API form (api.roboflow.com/workflows/<workspace>/<workflow>).
+    - Otherwise, pass through the given URL.
+    Appends api_key and confidence as query parameters if not present.
+    """
+    try:
+        from urllib.parse import urlparse, urlencode, parse_qsl, urlunparse
+
+        parsed = urlparse(url)
+        netloc = parsed.netloc.lower()
+        path = parsed.path
+
+        # Convert editor URL → API endpoint
+        if "app.roboflow.com" in netloc and "/workflows/" in path:
+            # Expect: /<workspace>/workflows/edit/<workflow>
+            parts = [p for p in path.split("/") if p]
+            # parts: [workspace, 'workflows', 'edit', workflow]
+            if len(parts) >= 4 and parts[1] == "workflows" and parts[2] == "edit":
+                workspace = parts[0]
+                workflow = parts[3]
+                path = f"/workflows/{workspace}/{workflow}"
+                netloc = "api.roboflow.com"
+
+        # Rebuild query with api_key + confidence
+        query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        if api_key and "api_key" not in query:
+            query["api_key"] = api_key
+        if confidence is not None and "confidence" not in query:
+            query["confidence"] = str(confidence)
+
+        new = parsed._replace(netloc=netloc, path=path, query=urlencode(query))
+        return urlunparse(new)
+    except Exception:
+        # Simple fallback
+        sep = "&" if "?" in url else "?"
+        tail = f"api_key={api_key}" + (f"&confidence={confidence}" if confidence is not None else "")
+        return f"{url}{sep}{tail}"
+
+def _find_best_prediction(obj):
+    """Heuristically find the best prediction in arbitrary Roboflow responses.
+
+    Returns (label, confidence) where label may be None if not found.
+    """
+    best_label = None
+    best_conf = -1.0
+
+    def consider(p):
+        nonlocal best_label, best_conf
+        if not isinstance(p, dict):
+            return
+        label = p.get("class") or p.get("label") or p.get("name")
+        conf = p.get("confidence") or p.get("score") or p.get("probability")
+        try:
+            conf = float(conf) if conf is not None else None
+        except Exception:
+            conf = None
+        if label and conf is not None and conf > best_conf:
+            best_label, best_conf = label, conf
+
+    def walk(o):
+        if isinstance(o, list):
+            for item in o:
+                walk(item)
+        elif isinstance(o, dict):
+            # Common containers
+            if isinstance(o.get("predictions"), list):
+                for p in o["predictions"]:
+                    consider(p)
+            if isinstance(o.get("results"), list):
+                for p in o["results"]:
+                    # results may be a list of dicts that include predictions
+                    walk(p)
+            # Also examine nested dicts
+            for v in o.values():
+                walk(v)
+
+    walk(obj)
+    return best_label, best_conf
+
 def _label_to_category_id(label: str) -> int:
     """Map a free-form label to our category IDs (1: can, 2: bottle, 3: garbage)."""
     if not label:
@@ -740,34 +822,56 @@ def _label_to_category_id(label: str) -> int:
     return 3
 
 def recognizeImage(image):
-    """Recognize the image via Roboflow workflow and return category ID."""
+    """Recognize the image via Roboflow and return category ID.
+
+    Accepts either model or workflow URLs. Automatically normalizes editor URLs to
+    API endpoints and handles different response shapes by searching for predictions.
+    """
     if not ROBOFLOW_API_KEY:
         raise EnvironmentError("ROBOFLOW_API_KEY must be set for Roboflow recognition.")
 
     image_bytes = _encode_jpeg(image)
-    url = f"{ROBOFLOW_MODEL_URL}?api_key={ROBOFLOW_API_KEY}&confidence={ROBOFLOW_CONFIDENCE}"
-    print(f"[Roboflow] Sending image for detection (confidence>={ROBOFLOW_CONFIDENCE})")
+    url = _normalize_roboflow_url(ROBOFLOW_MODEL_URL, ROBOFLOW_API_KEY, ROBOFLOW_CONFIDENCE)
+    print(f"[Roboflow] POST {url}")
+    result = None
+    last_exc = None
     try:
         files = {"file": ("frame.jpg", image_bytes, "image/jpeg")}
-        response = requests.post(url, files=files, timeout=20)
+        headers = {"Accept": "application/json"}
+        response = requests.post(url, files=files, headers=headers, timeout=20)
         response.raise_for_status()
-        result = response.json()
+        # Some endpoints return text/plain with JSON content
+        text = response.text.strip()
+        try:
+            result = response.json()
+        except Exception:
+            result = json.loads(text)
     except Exception as exc:
-        print(f"[Roboflow] Request failed: {exc}")
+        last_exc = exc
+        print(f"[Roboflow] Multipart upload failed; retrying as form body: {exc}")
+        try:
+            # Alternate path used by some endpoints: send as form field 'image' (base64)
+            import base64
+            b64 = base64.b64encode(image_bytes).decode("ascii")
+            data = {"image": b64}
+            headers = {"Accept": "application/json"}
+            response = requests.post(url, data=data, headers=headers, timeout=20)
+            response.raise_for_status()
+            text = response.text.strip()
+            try:
+                result = response.json()
+            except Exception:
+                result = json.loads(text)
+        except Exception as exc2:
+            print(f"[Roboflow] Fallback request failed: {exc2}")
+            return 3
+
+    label, conf = _find_best_prediction(result)
+    if not label:
+        print("[Roboflow] No predictions found in response; defaulting to garbage (3)")
         return 3
-
-    predictions = result.get("predictions") or result.get("results") or []
-    if not isinstance(predictions, list):
-        predictions = predictions.get("predictions", []) if isinstance(predictions, dict) else []
-
-    if not predictions:
-        print("[Roboflow] No predictions; defaulting to garbage (3)")
-        return 3
-
-    best = max(predictions, key=lambda p: p.get("confidence", 0))
-    label = best.get("class") or best.get("label") or ""
     category_id = _label_to_category_id(label)
-    print(f"[Roboflow] Top label '{label}' ⇒ category ID {category_id}")
+    print(f"[Roboflow] Top label '{label}' (conf={conf}) ⇒ category ID {category_id}")
     return category_id
 
 def recognizeImage_gemini(image):
