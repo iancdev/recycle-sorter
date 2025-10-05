@@ -121,6 +121,7 @@ export default function KioskPage(): ReactElement {
     status: scannerStatus,
     errorMessage: scannerError,
     switchCamera,
+    decoderInfo,
   } = useBarcodeScanner({
     onScan: handleBarcode,
     facingMode: "user",
@@ -721,6 +722,19 @@ export default function KioskPage(): ReactElement {
                     }
                   >
                     {REALTIME_STATUS_LABELS[realtimeStatus]}
+                  </dd>
+                </div>
+                <div className="flex items-center justify-between rounded-2xl border border-neutral-800 bg-neutral-950/70 px-3 py-2">
+                  <dt className="uppercase tracking-wide text-neutral-500">Decoder</dt>
+                  <dd className="text-neutral-100">
+                    {decoderInfo ? (
+                      <span className="font-mono text-xs">
+                        {decoderInfo.path}
+                        {decoderInfo.profile ? `:${decoderInfo.profile}` : ""}
+                      </span>
+                    ) : (
+                      <span className="text-neutral-400">n/a</span>
+                    )}
                   </dd>
                 </div>
               </dl>

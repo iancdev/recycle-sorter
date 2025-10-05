@@ -17,6 +17,12 @@ type UseBarcodeScannerOptions = {
   decodeIntervalMs?: number;
 };
 
+interface DecoderInfo {
+  path: "BarcodeDetector" | "ZXing" | "ZXingFallback" | "None";
+  profile?: string;
+  at: number;
+}
+
 interface UseBarcodeScannerResult {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   status: ScannerStatus;
@@ -24,11 +30,12 @@ interface UseBarcodeScannerResult {
   start: () => Promise<void>;
   stop: () => void;
   switchCamera: () => Promise<void>;
+  decoderInfo?: DecoderInfo;
 }
 
 const TARGET_CAMERA_LABEL = "Front Camera";
 const MAX_FRAME_DIMENSION = 1920;
-const DEFAULT_DECODE_INTERVAL_MS = 5;
+const DEFAULT_DECODE_INTERVAL_MS = 15;
 const MAX_DEBUG_SAMPLES = 10;
 
 const BASE_VIDEO_CONSTRAINTS: Pick<MediaTrackConstraints, "width" | "height" | "frameRate" | "aspectRatio"> = {
@@ -193,6 +200,8 @@ export function useBarcodeScanner(
   const barcodeDetectorRef = useRef<BarcodeDetector | null>(null);
   const devicesRef = useRef<MediaDeviceInfo[]>([]);
   const currentDeviceIndexRef = useRef<number>(-1);
+  const lastDecoderInfoRef = useRef<DecoderInfo>({ path: "None", at: 0 });
+  const [decoderInfo, setDecoderInfo] = useState<DecoderInfo | undefined>(undefined);
 
   const [status, setStatus] = useState<ScannerStatus>("idle");
   const statusRef = useRef<ScannerStatus>("idle");
@@ -287,6 +296,8 @@ export function useBarcodeScanner(
             lastScanRef.current = { value: raw, timestamp: now };
             attemptCounterRef.current = 0;
             console.log("[barcode] Detected via BarcodeDetector", { value: raw });
+            lastDecoderInfoRef.current = { path: "BarcodeDetector", at: now };
+            setDecoderInfo(lastDecoderInfoRef.current);
             onScan?.(raw);
             return;
           }
@@ -318,22 +329,12 @@ export function useBarcodeScanner(
     }
 
     if (readResults.length === 0) {
-      for (const profile of ZXING_FALLBACK_PROFILES) {
-        try {
-          readResults = await readBarcodes(imageData, profile);
-        } catch (e) {
-          if (debugSampleRef.current < MAX_DEBUG_SAMPLES) {
-            console.debug("[barcode] ZXing fallback error", { binarizer: profile.binarizer }, e);
-          }
-          readResults = [];
-        }
-        if (readResults.length > 0) {
-          break;
-        }
-      }
-      if (readResults.length === 0) {
-        return;
-      }
+      // Fallbacks disabled for diagnostics clarity
+      // (Leave the block present for easy reenabling later)
+      // If you want fallbacks, loop ZXING_FALLBACK_PROFILES here and set decoderInfo accordingly
+      return;
+    } else {
+      lastDecoderInfoRef.current = { path: "ZXing", profile: "primary", at: Date.now() };
     }
 
     const [firstResult] = readResults;
@@ -360,6 +361,7 @@ export function useBarcodeScanner(
       value,
       format: firstResult.format,
     });
+    setDecoderInfo(lastDecoderInfoRef.current);
     onScan?.(value);
     return;
   
