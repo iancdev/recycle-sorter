@@ -861,7 +861,6 @@ def _label_to_category_id(label: str) -> int:
     if "bottle" in norm or "bottles" in norm:
         return 2
     return 3
-
 def recognizeImage(image):
     """Recognize image using Roboflow serverless Workflows via inference_sdk.
 
@@ -874,7 +873,11 @@ def recognizeImage(image):
 
     image_bytes = _encode_jpeg(image)
 
-    # Primary: inference_sdk client with hardcoded serverless settings
+    # Save to temporary file manually
+    tmp_path = f"temp_image_{uuid.uuid4().hex}.jpg"
+    with open(tmp_path, "wb") as f:
+        f.write(image_bytes)
+
     try:
         from inference_sdk import InferenceHTTPClient  # type: ignore
         client = InferenceHTTPClient(
@@ -884,7 +887,7 @@ def recognizeImage(image):
         result = client.run_workflow(
             workspace_name="ftc16031",
             workflow_id="detect-and-classify-2",
-            images={"image": image_bytes},
+            images={"image": tmp_path},  # reference file path
             use_cache=True,
         )
         label, conf = _find_best_prediction(result)
@@ -896,8 +899,16 @@ def recognizeImage(image):
         category_id = _label_to_category_id(label)
         print(f"[Roboflow] SDK top label '{label}' (conf={conf}) ⇒ category ID {category_id}")
         return category_id
+
     except Exception as exc:
         print(f"[Roboflow] SDK call failed, falling back to serverless HTTP: {exc}")
+
+    finally:
+        # Delete temporary file
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
 
     # Fallback: direct serverless HTTP JSON with base64 image
     try:
