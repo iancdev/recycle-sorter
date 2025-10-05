@@ -9,7 +9,9 @@ import { authenticateBarcode } from "../../features/kiosk/api/authenticate-barco
 import { closeSession } from "../../features/kiosk/api/close-session";
 import { useBarcodeScanner } from "../../features/kiosk/hooks/useBarcodeScanner";
 import { useSessionRealtime } from "../../features/kiosk/hooks/useSessionRealtime";
+import { useSupabaseClient } from "../../features/kiosk/providers/SupabaseClientProvider";
 import { useDepositAnnouncements } from "../../features/kiosk/audio/useDepositAnnouncements";
+import { LinkPhoneCard } from "../../features/kiosk/components/LinkPhoneCard";
 import { useKioskStore } from "../../features/kiosk/state/useKioskStore";
 import { appConfig } from "../../lib/config";
 import { formatCurrencyFromCents } from "../../lib/format";
@@ -52,6 +54,8 @@ export default function KioskPage(): ReactElement {
   const sessionItems = useKioskStore((state) => state.sessionItems);
   const categories = useKioskStore((state) => state.categories);
   const realtimeStatus = useKioskStore((state) => state.realtimeStatus);
+  const recentSessions = useKioskStore((state) => state.recentSessions);
+  const setRecentSessions = useKioskStore((state) => state.setRecentSessions);
 
   useSessionRealtime(session?.id ?? null, profile?.id ?? null);
 
@@ -61,11 +65,15 @@ export default function KioskPage(): ReactElement {
   const handleBarcode = useCallback(async (rawBarcode: string) => {
     const trimmed = rawBarcode.trim();
     if (!trimmed) {
+      console.debug("[barcode] Ignoring empty scan result", { rawBarcode });
       return;
     }
 
+    console.log("[barcode] Received scan event", { rawBarcode, trimmed });
+
     const store = useKioskStore.getState();
     if (store.status === "authenticating") {
+      console.debug("[barcode] Skipping scan while authenticating", { trimmed });
       return;
     }
 
@@ -75,6 +83,10 @@ export default function KioskPage(): ReactElement {
       store.lastScannedAt &&
       now - store.lastScannedAt < 1500
     ) {
+      console.debug("[barcode] Throttling duplicate barcode", {
+        trimmed,
+        sinceLast: now - store.lastScannedAt,
+      });
       return;
     }
 
@@ -82,10 +94,15 @@ export default function KioskPage(): ReactElement {
     store.touchActivity();
 
     try {
+      console.log("[barcode] Authenticating barcode", { trimmed });
       const payload = await authenticateBarcode({ barcode: trimmed });
+      console.log("[barcode] Barcode authenticated", {
+        trimmed,
+        sessionId: payload.session.id,
+      });
       useKioskStore.getState().setReady(payload);
     } catch (error) {
-      console.error(error);
+      console.error("[barcode] Failed to authenticate barcode", error);
       const message =
         error instanceof Error ? error.message : "Failed to authenticate barcode";
       useKioskStore.getState().setError(message);
@@ -129,6 +146,7 @@ export default function KioskPage(): ReactElement {
     : null;
   const latestAmount = latestItem ? formatCurrencyFromCents(latestItem.amount_cents) : null;
 
+  const supabase = useSupabaseClient();
   const receiptItems = useMemo(() => sessionItems.slice(0, 12), [sessionItems]);
 
   const { announcement, isSynthesizing, clearAnnouncement } = useDepositAnnouncements({
@@ -136,6 +154,46 @@ export default function KioskPage(): ReactElement {
     latestCategory,
     audioEnabled: enableAudioFeedback,
   });
+
+
+  useEffect(() => {
+    const profileId = profile?.id;
+
+    if (!profileId) {
+      setRecentSessions([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    const load = async () => {
+      const { data, error } = await supabase
+        .from("sessions")
+        .select("id,total_cents,started_at,status")
+        .eq("profile_id", profileId)
+        .order("started_at", { ascending: false })
+        .limit(5);
+
+      if (cancelled) {
+        return;
+      }
+
+      if (error) {
+        console.warn("Failed to load recent sessions", error);
+        return;
+      }
+
+      setRecentSessions(data ?? []);
+    };
+
+    load();
+    const intervalId = window.setInterval(load, 15000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [profile?.id, session?.status, supabase, setRecentSessions]);
 
   const showErrorOverlay = status === "error";
 
@@ -456,6 +514,34 @@ export default function KioskPage(): ReactElement {
           </div>
 
           <div className="rounded-3xl border border-neutral-800 bg-neutral-900/60 p-6 text-sm text-neutral-200">
+            <h2 className="text-lg font-semibold text-neutral-50">Recent sessions</h2>
+            {recentSessions.length > 0 ? (
+              <ul className="mt-4 space-y-3">
+                {recentSessions.map((item) => (
+                  <li
+                    key={item.id}
+                    className="rounded-2xl border border-neutral-800 bg-neutral-950/70 px-4 py-3 text-xs text-neutral-300"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span>{new Date(item.started_at).toLocaleDateString()}</span>
+                      <span className="font-semibold text-sky-300">
+                        {formatCurrencyFromCents(item.total_cents || 0)}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-[11px] uppercase tracking-wide text-neutral-500">
+                      {item.status}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-4 text-xs text-neutral-500">
+                Recent sessions will appear here after you finish earning.
+              </p>
+            )}
+          </div>
+
+          <div className="rounded-3xl border border-neutral-800 bg-neutral-900/60 p-6 text-sm text-neutral-200">
             <h2 className="text-lg font-semibold text-neutral-50">Receipt</h2>
             {status === "ready" && receiptItems.length > 0 ? (
               <ul className="mt-4 max-h-72 space-y-3 overflow-y-auto pr-1">
@@ -510,9 +596,11 @@ export default function KioskPage(): ReactElement {
             <ol className="mt-3 list-decimal space-y-2 pl-5 text-neutral-300">
               <li>Hold the barcode steady in front of the camera.</li>
               <li>Wait for the kiosk to confirm your account.</li>
-              <li>Deposit items once the Lazy Susan rotates to the highlighted bin.</li>
+              <li>Place the item on the bin platform when the prompt appears. The system will sort it automatically.</li>
             </ol>
           </div>
+
+          <LinkPhoneCard />
         </aside>
       </main>
     </div>

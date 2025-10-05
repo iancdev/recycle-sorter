@@ -21,7 +21,12 @@ interface UseBarcodeScannerResult {
   stop: () => void;
 }
 
-const TARGET_CAMERA_LABEL = "Front Facing Camera";
+const TARGET_CAMERA_LABEL = "Front Camera";
+const BASE_VIDEO_CONSTRAINTS: Pick<MediaTrackConstraints, "width" | "height" | "frameRate"> = {
+  width: { ideal: 1280, min: 960 },
+  height: { ideal: 720, min: 540 },
+  frameRate: { ideal: 30, max: 60 },
+};
 
 async function selectFrontCamera(fallbackFacingMode: "user" | "environment"): Promise<MediaTrackConstraints> {
   const selectByLabel = async (): Promise<MediaTrackConstraints | null> => {
@@ -32,7 +37,11 @@ async function selectFrontCamera(fallbackFacingMode: "user" | "environment"): Pr
       );
 
       if (match) {
-        return { deviceId: { exact: match.deviceId } };
+        return {
+          deviceId: { exact: match.deviceId },
+          facingMode: { ideal: "user" },
+          ...BASE_VIDEO_CONSTRAINTS,
+        };
       }
     } catch (error) {
       console.warn("Unable to enumerate media devices", error);
@@ -61,7 +70,10 @@ async function selectFrontCamera(fallbackFacingMode: "user" | "environment"): Pr
     return postPermissionSelection;
   }
 
-  return { facingMode: { ideal: fallbackFacingMode } };
+  return {
+    facingMode: { ideal: fallbackFacingMode },
+    ...BASE_VIDEO_CONSTRAINTS,
+  };
 }
 
 
@@ -123,6 +135,8 @@ export function useBarcodeScanner(
       console.log("[barcode] Starting scanner with constraints", videoConstraints);
       const hints = new Map();
       hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.CODE_128]);
+      hints.set(DecodeHintType.TRY_HARDER, true);
+      hints.set(DecodeHintType.ASSUME_GS1, true);
       const reader = new BrowserMultiFormatReader(hints);
       readerRef.current = reader;
 
@@ -160,8 +174,21 @@ export function useBarcodeScanner(
           }
 
           if (error && statusRef.current !== "error") {
-            // ZXing fires NotFoundExceptions during normal operation; ignore them.
-            if (error.name === "NotFoundException") {
+            const name = typeof error === "object" && error && "name" in error
+              ? String((error as { name: unknown }).name)
+              : undefined;
+            const message =
+              typeof error === "object" && error && "message" in error
+                ? String((error as { message: unknown }).message)
+                : String(error);
+
+            const isExpectedMiss =
+              name === "NotFoundException" ||
+              name === "ChecksumException" ||
+              name === "FormatException" ||
+              message.includes("No MultiFormat Readers");
+
+            if (isExpectedMiss) {
               attemptCounterRef.current += 1;
               if (attemptCounterRef.current % 15 === 0) {
                 console.log("[barcode] Scanning… no barcode yet", {
