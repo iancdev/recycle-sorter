@@ -27,7 +27,6 @@ interface UseBarcodeScannerResult {
 const TARGET_CAMERA_LABEL = "Front Camera";
 const MAX_FRAME_DIMENSION = 1280;
 const DECODE_INTERVAL_MS = 80; // ~12.5 fps
-const ROI_HEIGHT_FRACTION = 0.35; // central horizontal band
 const MAX_DEBUG_SAMPLES = 10;
 
 const BASE_VIDEO_CONSTRAINTS: Pick<MediaTrackConstraints, "width" | "height" | "frameRate" | "aspectRatio"> = {
@@ -202,10 +201,8 @@ export function useBarcodeScanner(
 
     const vWidth = video.videoWidth;
     const vHeight = video.videoHeight;
-    const roiSrcHeight = Math.max(1, Math.round(vHeight * ROI_HEIGHT_FRACTION));
-    const roiSrcY = Math.max(0, Math.round((vHeight - roiSrcHeight) / 2));
     const outputWidth = Math.max(1, Math.round(vWidth * scale));
-    const outputHeight = Math.max(1, Math.round(roiSrcHeight * scale));
+    const outputHeight = Math.max(1, Math.round(vHeight * scale));
 
     if (debugSampleRef.current < MAX_DEBUG_SAMPLES) {
       console.debug("[barcode] Decoding frame", {
@@ -223,18 +220,8 @@ export function useBarcodeScanner(
 
     context.setTransform(1, 0, 0, 1, 0, 0);
     context.clearRect(0, 0, outputWidth, outputHeight);
-    // Draw central ROI band only
-    context.drawImage(
-      video,
-      0,
-      roiSrcY,
-      vWidth,
-      roiSrcHeight,
-      0,
-      0,
-      outputWidth,
-      outputHeight,
-    );
+    // Draw full frame (no cropping)
+    context.drawImage(video, 0, 0, vWidth, vHeight, 0, 0, outputWidth, outputHeight);
 
     // Fast path: BarcodeDetector if supported for Code 128
     if (useBarcodeDetectorRef.current && barcodeDetectorRef.current) {
