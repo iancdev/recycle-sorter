@@ -21,7 +21,7 @@ from google.genai import types
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or ""
 
-# Optional Roboflow backend configuration (from local 'image detect.py')
+# Roboflow configuration via environment
 ROBOFLOW_API_KEY = os.environ.get("ROBOFLOW_API_KEY") or ""
 ROBOFLOW_MODEL_URL = (
     os.environ.get("ROBOFLOW_MODEL_URL")
@@ -56,14 +56,7 @@ CATEGORY_ID_TO_SLUG = {
 }
 
 ESP32_BAUDRATE = 9600
-# Allow override via common env names when using Arduino/USB-serial devices
-ESP32_COM_PORT_OVERRIDE = (
-    os.environ.get("SERIAL_PORT")
-    or os.environ.get("ARDUINO_PORT")
-    or os.environ.get("ESP32_COM_PORT")
-    or os.environ.get("ESP32_COM_PORT_OVERRIDE")
-    or None
-)
+ESP32_COM_PORT_OVERRIDE = None
 
 
 class SerialESP32Client:
@@ -176,6 +169,18 @@ class SerialESP32Client:
             return raw.decode("utf-8", errors="replace").strip()
         except serial.SerialException as exc:
             raise RuntimeError(f"Failed to read from ESP32 over serial: {exc}") from exc
+
+    def reset_input_buffer(self):
+        """Clear any pending bytes from the serial input buffer."""
+        connection = self._ensure_connection()
+        try:
+            # Prefer modern API; fall back if unavailable
+            if hasattr(connection, "reset_input_buffer"):
+                connection.reset_input_buffer()
+            else:  # pragma: no cover - legacy pyserial
+                connection.flushInput()
+        except serial.SerialException as exc:
+            raise RuntimeError(f"Failed to reset ESP32 input buffer: {exc}") from exc
 
 
 _serial_client = None
@@ -404,6 +409,11 @@ def webcamFeed(*, max_frames=None, delay_seconds=0, show_window=False):
                     break
 
             # Wait for ultrasonic trigger from serial: (isMoving, isTriggered)
+            # Flush any stale lines so we react to a fresh state update
+            try:
+                get_serial_client().reset_input_buffer()
+            except Exception as exc:  # pylint: disable=broad-except
+                print(f"[ESP32] Failed to flush input buffer: {exc}")
             isMoving, isTriggered = currentState()
             while not isTriggered:
                 # Keep UI responsive and avoid busy-wait
