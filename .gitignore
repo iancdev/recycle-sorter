@@ -3,7 +3,7 @@
 node_modules/
 .DS_Store
 
-# Edge launch configuration (local only)
+# Edge launch configuration (local only; contains local secrets)
 edge/.launch.sh
 edge/.env.local
 edge/launch.sh
