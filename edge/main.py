@@ -5,6 +5,7 @@ import uuid
 import re
 import threading
 from collections import deque
+import platform
 
 import cv2
 import requests
@@ -431,13 +432,100 @@ def _open_camera(index=0):
                 pass
         cap = cv2.VideoCapture(index)
 
-    # Try to reduce buffering, ignore if not supported
+    # Avoid forcing tiny buffers on Windows DirectShow; can starve pipeline
     try:
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        if platform.system() != "Windows":
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     except Exception:
         pass
     return cap
-def recognizeAndValidate(cap, image, *, retry_count=1, retry_sleep=0.05):
+class FrameGrabber:
+    """Continuously captures frames on a background thread and stores latest.
+
+    This avoids starving the capture backend during long operations (network/IO),
+    which can cause repeated read failures on Windows.
+    """
+
+    def __init__(self, index=0):
+        self._index = index
+        self._cap = None
+        self._thread = None
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+        self._latest = None
+        self._latest_ts = 0.0
+        self._ok = False
+        self._fail_count = 0
+        self._last_reopen = 0.0
+        # Conservative thresholds to avoid thrashing the driver
+        self._max_fail_before_reopen = 60  # ~2 seconds @30fps
+        self._reopen_cooldown_sec = 3.0
+
+    def start(self):
+        if self._thread and self._thread.is_alive():
+            return True
+        self._cap = _open_camera(self._index)
+        if not self._cap or not self._cap.isOpened():
+            raise RuntimeError("Unable to open webcam (device index 0).")
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._loop, name="FrameGrabber", daemon=True)
+        self._thread.start()
+        return True
+
+    def _maybe_reopen(self):
+        now = time.time()
+        if now - self._last_reopen < self._reopen_cooldown_sec:
+            return
+        self._last_reopen = now
+        try:
+            if self._cap:
+                self._cap.release()
+        except Exception:
+            pass
+        time.sleep(0.5)
+        self._cap = _open_camera(self._index)
+        self._fail_count = 0
+
+    def _loop(self):
+        while not self._stop.is_set():
+            cap = self._cap
+            if cap is None or not cap.isOpened():
+                self._maybe_reopen()
+                time.sleep(0.05)
+                continue
+            ok, frame = cap.read()
+            if ok:
+                with self._lock:
+                    self._latest = frame
+                    self._latest_ts = time.time()
+                    self._ok = True
+                self._fail_count = 0
+            else:
+                self._fail_count += 1
+                if self._fail_count >= self._max_fail_before_reopen:
+                    self._maybe_reopen()
+                # Small sleep avoids tight loop on failure
+                time.sleep(0.005)
+
+    def get_latest_frame(self, *, copy=True):
+        with self._lock:
+            frame = self._latest
+            if frame is None:
+                return None
+            return frame.copy() if copy else frame
+
+    def stop(self):
+        self._stop.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=1.5)
+        try:
+            if self._cap:
+                self._cap.release()
+        except Exception:
+            pass
+        self._cap = None
+
+def recognizeAndValidate(get_frame, image, *, retry_count=1, retry_sleep=0.05):
     """Run Roboflow and Gemini; if mismatch, retry with a new frame once.
 
     Returns a single category_id per policy:
@@ -468,8 +556,7 @@ def recognizeAndValidate(cap, image, *, retry_count=1, retry_sleep=0.05):
     # Mismatch or both failed; retry once if allowed
     if retry_count > 0:
         time.sleep(max(0.0, retry_sleep))
-        ok, new_frame = cap.read()
-        frame2 = new_frame if ok else image
+        frame2 = get_frame(copy=True) or image
         try:
             rf2 = recognizeImage(frame2)
         except Exception as exc:
@@ -497,54 +584,22 @@ def recognizeAndValidate(cap, image, *, retry_count=1, retry_sleep=0.05):
 def webcamFeed(*, max_frames=None, delay_seconds=0, show_window=True):
     """Continuously read frames from webcam, classify, and command ESP32."""
 
-    cap = _open_camera(0)
-    if not cap.isOpened():
-        raise RuntimeError("Unable to open webcam (device index 0).")
+    grabber = FrameGrabber(index=0)
+    grabber.start()
 
     if show_window:
         cv2.namedWindow("Recycle Sorter", cv2.WINDOW_NORMAL)
         cv2.resizeWindow("Recycle Sorter", 960, 540)
 
     processed = 0
-    consecutive_failures = 0
-    reopen_attempts = 0
-    max_consecutive_failures = 5
-    max_reopen_attempts = 3
-    frame_retry_sleep = 0.5
 
     try:
         while True:
-            ok, frame = cap.read()
-            if not ok:
-                consecutive_failures += 1
-                print(f"[Webcam] Failed to read frame (attempt {consecutive_failures}). Retrying.")
-                if consecutive_failures < max_consecutive_failures:
-                    time.sleep(frame_retry_sleep)
-                    continue
-
-                reopen_attempts += 1
-                print(
-                    f"[Webcam] Reinitializing camera (attempt {reopen_attempts}/{max_reopen_attempts})."
-                )
-                cap.release()
-                time.sleep(max(frame_retry_sleep, 1.0))
-                cap = _open_camera(0)
-                if not cap.isOpened():
-                    cap.release()
-                    if reopen_attempts >= max_reopen_attempts:
-                        raise RuntimeError(
-                            "Unable to recover webcam stream after multiple attempts."
-                        )
-                    print("[Webcam] Reopen attempt failed; will retry.")
-                    time.sleep(1.0)
-                    continue
-
-                consecutive_failures = 0
-                time.sleep(frame_retry_sleep)
+            frame = grabber.get_latest_frame(copy=True)
+            if frame is None:
+                print("[Webcam] Waiting for first frame...")
+                time.sleep(0.05)
                 continue
-
-            consecutive_failures = 0
-            reopen_attempts = 0
 
             if show_window:
                 cv2.imshow("Recycle Sorter", frame)
@@ -558,8 +613,8 @@ def webcamFeed(*, max_frames=None, delay_seconds=0, show_window=True):
                 print("[Webcam] Waiting for trigger...")
                 # Keep UI responsive and avoid busy-wait
                 if show_window:
-                    ok2, frame2 = cap.read()
-                    if ok2:
+                    frame2 = grabber.get_latest_frame(copy=True)
+                    if frame2 is not None:
                         cv2.imshow("Recycle Sorter", frame2)
                         if cv2.waitKey(1) & 0xFF == ord("q"):
                             print("[Webcam] Quit signal received.")
@@ -569,13 +624,10 @@ def webcamFeed(*, max_frames=None, delay_seconds=0, show_window=True):
 
             print("[Webcam] Trigger received.")
             # Capture a fresh frame at trigger time
-            ok3, frame3 = cap.read()
-            if ok3:
-                frame_to_use = frame3
-            else:
-                frame_to_use = frame
+            frame3 = grabber.get_latest_frame(copy=True)
+            frame_to_use = frame3 if frame3 is not None else frame
             # Validate by cross-checking Roboflow and Gemini with one retry on mismatch
-            category_id = recognizeAndValidate(cap, frame_to_use, retry_count=1)
+            category_id = recognizeAndValidate(grabber.get_latest_frame, frame_to_use, retry_count=1)
             category_slug = CATEGORY_ID_TO_SLUG.get(category_id, "garbage")
 
             raw_payload = {
@@ -607,7 +659,7 @@ def webcamFeed(*, max_frames=None, delay_seconds=0, show_window=True):
             if delay_seconds:
                 time.sleep(delay_seconds)
     finally:
-        cap.release()
+        grabber.stop()
         if show_window:
             cv2.destroyWindow("Recycle Sorter")
 
