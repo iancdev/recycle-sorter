@@ -28,7 +28,7 @@ const STATUS_LABELS = {
 const SCANNER_STATUS_LABELS = {
   idle: "Camera initialising",
   requesting: "Requesting camera permissions…",
-  scanning: "Scanning for barcodes",
+  scanning: "Scanning for student ID",
   error: "Camera unavailable",
 } as const;
 
@@ -200,6 +200,23 @@ export default function KioskPage(): ReactElement {
       window.clearInterval(intervalId);
     };
   }, [profile?.id, session?.status, supabase, setRecentSessions]);
+
+  // Ensure camera stream is healthy when returning to unauthenticated state
+  useEffect(() => {
+    if (status !== "ready") {
+      const v = videoRef.current;
+      const needsRestart = !v || !(v.srcObject instanceof MediaStream) ||
+        (v.srcObject && (v.srcObject as MediaStream).getVideoTracks().every((t) => t.readyState !== "live"));
+      if (needsRestart) {
+        try {
+          stop();
+        } catch {}
+        start().catch((e) => console.debug("[barcode] restart failed", e));
+      } else {
+        v?.play().catch(() => undefined);
+      }
+    }
+  }, [status, start, stop]);
 
   const showErrorOverlay = status === "error";
   const showEndedOverlay = Boolean(session && session.status && session.status !== "active");
@@ -389,41 +406,28 @@ export default function KioskPage(): ReactElement {
       <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-8 py-10 lg:flex-row">
         <section className="flex w-full flex-1 flex-col gap-6">
           {status !== "ready" ? (
-            <>
-              <div className="relative aspect-[4/3] overflow-hidden rounded-3xl border border-neutral-800 bg-black">
-                <video
-                  ref={videoRef}
-                  className="h-full w-full object-cover"
-                  muted
-                  playsInline
-                  autoPlay
-                />
-                <div className="pointer-events-none absolute inset-x-6 bottom-6 rounded-2xl bg-neutral-900/80 px-4 py-3 text-sm text-neutral-200 shadow-lg">
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium">Scanner status</span>
-                    <span className="text-neutral-100">{scannerLabel}</span>
-                  </div>
-                  {scannerError ? (
-                    <p className="mt-2 text-xs text-rose-400">{scannerError}</p>
-                  ) : (
-                    <p className="mt-2 text-xs text-neutral-400">
-                      Hold your student ID in front of the camera.
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              <div className="rounded-3xl border border-neutral-800 bg-neutral-900/60 p-8 text-center">
-                <h2 className="text-2xl font-semibold text-neutral-50">Scan your student ID</h2>
-                <p className="mt-2 text-sm text-neutral-400">
-                  Scanning runs in the background; you’ll be signed in automatically.
-                </p>
-                <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-neutral-700 bg-neutral-900/80 px-4 py-1 text-xs uppercase tracking-wide text-neutral-300">
-                  <span className="font-medium">Scanner</span>
+            <div className="relative aspect-[4/3] overflow-hidden rounded-3xl border border-neutral-800 bg-black">
+              <video
+                ref={videoRef}
+                className="h-full w-full object-cover"
+                muted
+                playsInline
+                autoPlay
+              />
+              <div className="pointer-events-none absolute inset-x-6 bottom-6 rounded-2xl bg-neutral-900/80 px-4 py-3 text-sm text-neutral-200 shadow-lg">
+                <div className="flex items-center justify-between">
+                  <span className="font-medium">Scanner status</span>
                   <span className="text-neutral-100">{scannerLabel}</span>
                 </div>
+                {scannerError ? (
+                  <p className="mt-2 text-xs text-rose-400">{scannerError}</p>
+                ) : (
+                  <p className="mt-2 text-xs text-neutral-400">
+                    Hold your student ID in front of the camera.
+                  </p>
+                )}
               </div>
-            </>
+            </div>
           ) : (
             <>
               <div className="rounded-3xl border border-neutral-800 bg-neutral-900/60 p-6">
