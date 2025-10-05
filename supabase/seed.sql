@@ -1,8 +1,8 @@
 insert into public.categories (id, slug, display_name, deposit_cents, routing_slot, is_refundable)
 values
-  (gen_random_uuid(), 'can', 'Aluminum Can', 5, 1, true),
-  (gen_random_uuid(), 'bottle', 'Plastic Bottle', 10, 2, true),
-  (gen_random_uuid(), 'garbage', 'General Waste', 0, 3, false)
+  (gen_random_uuid(), 'can', 'Cans', 7, 1, true),
+  (gen_random_uuid(), 'bottle', 'Bottles', 8, 2, true),
+  (gen_random_uuid(), 'garbage', 'Garbage', 0, 3, false)
 on conflict (slug) do update
 set display_name = excluded.display_name,
     deposit_cents = excluded.deposit_cents,
