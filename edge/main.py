@@ -35,10 +35,12 @@ EDGE_DEVICE_LABEL = os.environ.get("EDGE_DEVICE_LABEL") or os.environ.get(
     "demo_kiosk",
 )
 
+# Global category ID mapping used for ESP32 commands and edge → backend slug mapping
+# 1: Cans, 2: Bottles, 3: Garbage
 CATEGORY_ID_TO_SLUG = {
-    0: "garbage",
     1: "can",
     2: "bottle",
+    3: "garbage",
 }
 
 ESP32_BAUDRATE = 115200
