@@ -123,15 +123,16 @@ async function selectFrontCamera(fallbackFacingMode: "user" | "environment"): Pr
   const selectByLabel = async (): Promise<MediaTrackConstraints | null> => {
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
+      // Priority: exact hardcoded label first, then heuristic front-facing labels
+      const exact = devices.find(
+        (d) => d.kind === "videoinput" && d.label && d.label.trim() === TARGET_CAMERA_LABEL,
+      );
       const lower = (s: string) => s.toLowerCase();
-      const isFrontLabel = (l: string) =>
-        /front|facetime|truedepth|user/.test(lower(l));
-      const frontDevices = devices.filter(
+      const isFrontLabel = (l: string) => /front|facetime|truedepth|user/.test(lower(l));
+      const heuristic = devices.find(
         (d) => d.kind === "videoinput" && d.label && isFrontLabel(d.label),
       );
-      const match = frontDevices[0] ?? devices.find(
-        (d) => d.kind === "videoinput" && d.label.trim() === TARGET_CAMERA_LABEL,
-      );
+      const match = exact ?? heuristic ?? null;
 
       if (match) {
         return {
@@ -602,4 +603,3 @@ export function useBarcodeScanner(
     switchCamera,
   };
 }
-
