@@ -6,6 +6,7 @@ node_modules/
 # Edge launch configuration (local only)
 edge/.launch.sh
 edge/.env.local
+edge/launch.sh
 
 # Ignore local Next.js outputs if created at root
 .next/
