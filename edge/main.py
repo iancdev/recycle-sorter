@@ -398,7 +398,7 @@ def currentState():
         return False, False
     
 
-def webcamFeed(*, max_frames=None, delay_seconds=0, show_window=False):
+def webcamFeed(*, max_frames=None, delay_seconds=0, show_window=True):
     """Continuously read frames from webcam, classify, and command ESP32."""
 
     cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
@@ -459,6 +459,7 @@ def webcamFeed(*, max_frames=None, delay_seconds=0, show_window=False):
             # Wait for ultrasonic trigger from serial: (isMoving, isTriggered)
             isMoving, isTriggered = currentState()
             while not isTriggered:
+                print("[Webcam] Waiting for trigger...")
                 # Keep UI responsive and avoid busy-wait
                 if show_window:
                     ok2, frame2 = cap.read()
@@ -498,6 +499,7 @@ def webcamFeed(*, max_frames=None, delay_seconds=0, show_window=False):
             # Wait for movement to stop (isMoving becomes 0)
             isMoving, isTriggered = currentState()
             while isMoving:
+                print("[Webcam] Waiting for movement to stop...")
                 time.sleep(0.05)
                 isMoving, isTriggered = currentState()
             print("[ESP32] Movement completed.")
