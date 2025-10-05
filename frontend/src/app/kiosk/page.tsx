@@ -1,5 +1,6 @@
 "use client";
 
+export const dynamic = "force-dynamic";
 
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -29,6 +30,13 @@ const SCANNER_STATUS_LABELS = {
   error: "Camera unavailable",
 } as const;
 
+const REALTIME_STATUS_LABELS = {
+  idle: "Idle",
+  connecting: "Connecting…",
+  online: "Online",
+  error: "Disconnected",
+} as const;
+
 
 export default function KioskPage(): ReactElement {
   const [isClosing, setIsClosing] = useState(false);
@@ -43,6 +51,7 @@ export default function KioskPage(): ReactElement {
   const lastActivityAt = useKioskStore((state) => state.lastActivityAt);
   const sessionItems = useKioskStore((state) => state.sessionItems);
   const categories = useKioskStore((state) => state.categories);
+  const realtimeStatus = useKioskStore((state) => state.realtimeStatus);
 
   useSessionRealtime(session?.id ?? null, profile?.id ?? null);
 
@@ -128,6 +137,8 @@ export default function KioskPage(): ReactElement {
     audioEnabled: enableAudioFeedback,
   });
 
+  const showErrorOverlay = status === "error";
+
   const handleCloseSession = useCallback(async () => {
     if (isClosing) {
       return;
@@ -186,7 +197,24 @@ export default function KioskPage(): ReactElement {
   }, [enableIdleTimeout, handleCloseSession, lastActivityAt, session, status]);
 
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className="relative flex min-h-screen flex-col">
+      {showErrorOverlay && (
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-neutral-950/90 px-8 text-center">
+          <h2 className="text-2xl font-semibold text-rose-200">Session paused due to an error</h2>
+          <p className="max-w-md text-sm text-neutral-200">
+            {errorMessage ?? "Something went wrong while talking to Supabase. Please try again."}
+          </p>
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            <button
+              type="button"
+              onClick={reset}
+              className="rounded-full border border-rose-400/40 bg-rose-500/10 px-5 py-2 text-xs font-semibold uppercase tracking-wide text-rose-200 transition hover:bg-rose-500/20"
+            >
+              Reset kiosk
+            </button>
+          </div>
+        </div>
+      )}
       <header className="border-b border-neutral-800 px-8 py-6">
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-2 text-left">
           <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
@@ -286,12 +314,19 @@ export default function KioskPage(): ReactElement {
             {status === "ready" && latestItem && latestCategory ? (
               <div className="space-y-3 text-sm text-neutral-200">
                 {enableAudioFeedback ? (
-                  <div className="flex items-center justify-between rounded-2xl border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-                    <span>
-                      {isSynthesizing
-                        ? "Preparing announcement…"
-                        : announcement?.text ?? "Ready to announce."}
-                    </span>
+                  <div className="flex items-center justify-between gap-3 rounded-2xl border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                    <div className="text-left">
+                      <p>
+                        {isSynthesizing
+                          ? "Preparing announcement…"
+                          : announcement?.text ?? "Ready to announce."}
+                      </p>
+                      {announcement && (
+                        <p className="mt-1 text-[10px] uppercase tracking-wide text-amber-300">
+                          Source: {announcement.provider.text}/{announcement.provider.audio}
+                        </p>
+                      )}
+                    </div>
                     {announcement && (
                       <button
                         type="button"
@@ -394,6 +429,30 @@ export default function KioskPage(): ReactElement {
                 </p>
               </>
             )}
+          </div>
+
+          <div className="rounded-3xl border border-neutral-800 bg-neutral-900/60 p-6 text-sm text-neutral-200">
+            <h2 className="text-lg font-semibold text-neutral-50">Diagnostics</h2>
+            <dl className="mt-4 space-y-3 text-xs">
+              <div className="flex items-center justify-between rounded-2xl border border-neutral-800 bg-neutral-950/70 px-3 py-2">
+                <dt className="uppercase tracking-wide text-neutral-500">Camera</dt>
+                <dd className="text-neutral-100">{SCANNER_STATUS_LABELS[scannerStatus]}</dd>
+              </div>
+              <div className="flex items-center justify-between rounded-2xl border border-neutral-800 bg-neutral-950/70 px-3 py-2">
+                <dt className="uppercase tracking-wide text-neutral-500">Realtime</dt>
+                <dd
+                  className={
+                    realtimeStatus === "error"
+                      ? "text-rose-300"
+                      : realtimeStatus === "online"
+                      ? "text-emerald-300"
+                      : "text-neutral-100"
+                  }
+                >
+                  {REALTIME_STATUS_LABELS[realtimeStatus]}
+                </dd>
+              </div>
+            </dl>
           </div>
 
           <div className="rounded-3xl border border-neutral-800 bg-neutral-900/60 p-6 text-sm text-neutral-200">

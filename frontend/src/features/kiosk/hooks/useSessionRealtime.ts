@@ -14,6 +14,7 @@ export function useSessionRealtime(
   const setCategories = useKioskStore((state) => state.setCategories);
   const setSessionItems = useKioskStore((state) => state.setSessionItems);
   const prependSessionItem = useKioskStore((state) => state.prependSessionItem);
+  const setRealtimeStatus = useKioskStore((state) => state.setRealtimeStatus);
   const updateSession = useKioskStore((state) => state.updateSession);
   const updateProfile = useKioskStore((state) => state.updateProfile);
   const clearSessionData = useKioskStore((state) => state.clearSessionData);
@@ -26,6 +27,7 @@ export function useSessionRealtime(
     }
 
     let isCancelled = false;
+    setRealtimeStatus("connecting");
     const channel = supabase.channel(`session-${sessionId}`);
 
     const loadInitialData = async () => {
@@ -115,6 +117,11 @@ export function useSessionRealtime(
     channel.subscribe((status) => {
       if (status === "CHANNEL_ERROR") {
         console.error("Realtime channel error for session", sessionId);
+        setRealtimeStatus("error");
+      }
+
+      if (status === "SUBSCRIBED") {
+        setRealtimeStatus("online");
       }
     });
 
@@ -123,6 +130,7 @@ export function useSessionRealtime(
       supabase
         .removeChannel(channel)
         .catch((error) => console.error("Failed to remove channel", error));
+      setRealtimeStatus("idle");
     };
   }, [
     clearSessionData,
@@ -135,5 +143,6 @@ export function useSessionRealtime(
     touchActivity,
     updateProfile,
     updateSession,
+    setRealtimeStatus,
   ]);
 }

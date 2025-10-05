@@ -21,21 +21,44 @@ interface UseBarcodeScannerResult {
   stop: () => void;
 }
 
-async function selectFrontCamera(fallbackFacingMode: "user" | "environment"): Promise<MediaTrackConstraints> {
-  try {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const frontFacing = devices.find(
-      (device) =>
-        device.kind === "videoinput" && device.label.trim() === "Front Facing Camera",
-    );
+const TARGET_CAMERA_LABEL = "Front Camera";
 
-    if (frontFacing) {
-      return {
-        deviceId: { exact: frontFacing.deviceId },
-      };
+async function selectFrontCamera(fallbackFacingMode: "user" | "environment"): Promise<MediaTrackConstraints> {
+  const selectByLabel = async (): Promise<MediaTrackConstraints | null> => {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const match = devices.find(
+        (device) => device.kind === "videoinput" && device.label.trim() === TARGET_CAMERA_LABEL,
+      );
+
+      if (match) {
+        return { deviceId: { exact: match.deviceId } };
+      }
+    } catch (error) {
+      console.warn("Unable to enumerate media devices", error);
     }
-  } catch (error) {
-    console.warn("Unable to enumerate media devices", error);
+
+    return null;
+  };
+
+  const initialSelection = await selectByLabel();
+  if (initialSelection) {
+    return initialSelection;
+  }
+
+  try {
+    const probeStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: fallbackFacingMode } },
+      audio: false,
+    });
+    probeStream.getTracks().forEach((track) => track.stop());
+  } catch (probeError) {
+    console.warn("Unable to probe camera for label access", probeError);
+  }
+
+  const postPermissionSelection = await selectByLabel();
+  if (postPermissionSelection) {
+    return postPermissionSelection;
   }
 
   return { facingMode: { ideal: fallbackFacingMode } };

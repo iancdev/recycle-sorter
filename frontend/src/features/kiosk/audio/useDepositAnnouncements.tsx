@@ -9,6 +9,8 @@ export interface DepositAnnouncement {
   itemId: string;
   text: string;
   generatedAt: number;
+  audioUrl?: string | null;
+  provider: { text: string; audio: string };
 }
 
 interface UseDepositAnnouncementsOptions {
@@ -61,17 +63,63 @@ export function useDepositAnnouncements(
     handledItemIds.current.add(latestItem.id);
     setIsSynthesizing(true);
 
-    const timeout = window.setTimeout(() => {
-      setAnnouncement({
-        itemId: latestItem.id,
-        text: description,
-        generatedAt: Date.now(),
-      });
-      setIsSynthesizing(false);
-      console.info("[kiosk] audio-placeholder", description);
-    }, 400);
+    const controller = new AbortController();
 
-    return () => window.clearTimeout(timeout);
+    const payload = {
+      categoryName: latestCategory.display_name,
+      amountCents: latestItem.amount_cents,
+      confidence: latestItem.confidence ?? null,
+    };
+
+    fetch("/api/kiosk/announcement", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+        return (await response.json()) as {
+          text: string;
+          audio?: { type: string; value: string } | null;
+          provider: { text: string; audio: string };
+        };
+      })
+      .then((data) => {
+        const audioUrl = data.audio?.type === "base64" ? data.audio.value : data.audio?.value;
+        setAnnouncement({
+          itemId: latestItem.id,
+          text: data.text,
+          generatedAt: Date.now(),
+          audioUrl: audioUrl ?? null,
+          provider: data.provider,
+        });
+        if (audioUrl) {
+          const audio = new Audio(audioUrl);
+          void audio.play().catch((error) => {
+            console.warn("Failed to play announcement audio", error);
+          });
+        }
+      })
+      .catch((error) => {
+        console.warn("Announcement generation failed", error);
+        setAnnouncement({
+          itemId: latestItem.id,
+          text: description,
+          generatedAt: Date.now(),
+          audioUrl: null,
+          provider: { text: "fallback", audio: "fallback" },
+        });
+      })
+      .finally(() => {
+        setIsSynthesizing(false);
+      });
+
+    return () => controller.abort();
   }, [audioEnabled, description, latestCategory, latestItem]);
 
   const clearAnnouncement = () => setAnnouncement(null);

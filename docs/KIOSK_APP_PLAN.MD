@@ -55,20 +55,18 @@
 
 
 ## Progress Snapshot (current)
-- Realtime balance + inactivity safeguards now implemented; remaining work shifts to audio feedback and advanced UI polish.
-- Placeholder announcement hook added for future Gemini/ElevenLabs integration.
+- Realtime balance + inactivity safeguards implemented; Gemini/ElevenLabs announcement API scaffold online.
 - `/kiosk` route scaffolding in place with barcode scanner loop, Supabase client provider, and session store.
 - Kiosk UI renders camera preview, session summary, latest item card, and receipt list fed by realtime Supabase updates.
 - Supabase edge functions integrated via browser helpers for barcode auth and session closure.
 
 ## Remaining Work
-- Surface visual/audio feedback for each deposit (LLM blurb + ElevenLabs playback).
-- Implement inactivity timeout + auto-close session with confirmation prompt.
+- Wire production Gemini/ElevenLabs keys and tune narration copy.
 - Add item detail modals and error recovery flows for camera failures or auth retries.
 
 
 ## Upcoming Enhancements
-- Integrate Gemini prompt + ElevenLabs playback for deposit feedback.
+- Integrate Gemini prompt + ElevenLabs playback for deposit feedback (API scaffold ready; requires keys).
 - Animate latest-item hero card with routing guidance cues.
 - Expand receipt list with filter/search + detailed modal view.
 - Add diagnostics panel for camera/ESP32 connectivity.

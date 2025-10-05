@@ -26,6 +26,7 @@ interface KioskState {
   authMeta: Nullable<SessionPayload["auth"]>;
   categories: Record<string, CategoryRow>;
   sessionItems: SessionItemRecord[];
+  realtimeStatus: "idle" | "connecting" | "online" | "error";
   setAuthenticating: (barcode: string) => void;
   setReady: (payload: SessionPayload) => void;
   setError: (message: string) => void;
@@ -37,6 +38,7 @@ interface KioskState {
   updateProfile: (profile: ProfileRow) => void;
   clearSessionData: () => void;
   touchActivity: () => void;
+  setRealtimeStatus: (status: "idle" | "connecting" | "online" | "error") => void;
 }
 
 const initialState: Pick<
@@ -52,6 +54,7 @@ const initialState: Pick<
   | "authMeta"
   | "categories"
   | "sessionItems"
+  | "realtimeStatus"
 > = {
   status: "idle",
   errorMessage: undefined,
@@ -64,6 +67,7 @@ const initialState: Pick<
   authMeta: null,
   categories: {},
   sessionItems: [],
+  realtimeStatus: "idle",
 };
 
 function sortItemsDesc(items: SessionItemRecord[]): SessionItemRecord[] {
@@ -104,12 +108,15 @@ export const useKioskStore = create<KioskState>((set) => ({
       lastActivityAt: Date.now(),
     })),
   reset: () => set(() => ({ ...initialState })),
+  setRealtimeStatus: (realtimeStatus) =>
+    set(() => ({ realtimeStatus })),
   setCategories: (categories) =>
     set(() => ({
       categories: categories.reduce<Record<string, CategoryRow>>((acc, item) => {
         acc[item.id] = item;
         return acc;
       }, {}),
+      realtimeStatus: "online",
     })),
   setSessionItems: (items) =>
     set(() => ({
