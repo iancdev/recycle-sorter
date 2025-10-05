@@ -20,6 +20,25 @@ interface UseBarcodeScannerResult {
   stop: () => void;
 }
 
+async function selectFrontCamera(facingMode: "user" | "environment") {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const videoDevices = devices.filter((device) => device.kind === "videoinput");
+    const exactMatch = videoDevices.find(
+      (device) => device.label.trim() === "Front Facing Camera",
+    );
+
+    if (exactMatch) {
+      return { deviceId: { exact: exactMatch.deviceId } };
+    }
+  } catch (error) {
+    console.warn("Unable to enumerate media devices", error);
+  }
+
+  return { facingMode };
+}
+
+
 export function useBarcodeScanner(
   options: UseBarcodeScannerOptions = {},
 ): UseBarcodeScannerResult {
@@ -31,6 +50,7 @@ export function useBarcodeScanner(
   const lastScanRef = useRef<{ value: string; timestamp: number } | null>(null);
 
   const [status, setStatus] = useState<ScannerStatus>("idle");
+  const statusRef = useRef<ScannerStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | undefined>(undefined);
 
   const stop = useCallback(() => {
@@ -44,11 +64,12 @@ export function useBarcodeScanner(
       videoRef.current.srcObject = null;
     }
 
+    statusRef.current = "idle";
     setStatus("idle");
-  }, []);
+  }, [setStatus]);
 
   const start = useCallback(async () => {
-    if (status === "scanning" || status === "requesting") {
+    if (statusRef.current === "scanning" || statusRef.current === "requesting") {
       return;
     }
 
@@ -58,22 +79,21 @@ export function useBarcodeScanner(
 
     if (typeof navigator === "undefined" || !navigator.mediaDevices) {
       setErrorMessage("Camera access is not supported in this browser");
+      statusRef.current = "error";
       setStatus("error");
       return;
     }
 
     try {
+      statusRef.current = "requesting";
       setStatus("requesting");
       setErrorMessage(undefined);
 
-      const constraints: MediaStreamConstraints = {
-        video: {
-          facingMode,
-        },
+      const videoConstraints = await selectFrontCamera(facingMode);
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: videoConstraints,
         audio: false,
-      };
-
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      });
       videoRef.current.srcObject = stream;
 
       const reader = new BrowserMultiFormatReader();
@@ -100,7 +120,7 @@ export function useBarcodeScanner(
             onScan?.(value);
           }
 
-          if (error && status !== "error") {
+          if (error && statusRef.current !== "error") {
             // ZXing fires NotFoundExceptions during normal operation; ignore them.
             if (error.name === "NotFoundException") {
               return;
@@ -109,6 +129,7 @@ export function useBarcodeScanner(
         },
       );
 
+      statusRef.current = "scanning";
       setStatus("scanning");
     } catch (error) {
       console.error(error);
@@ -117,10 +138,11 @@ export function useBarcodeScanner(
           ? error.message
           : "Unable to start camera stream",
       );
+      statusRef.current = "error";
       setStatus("error");
       stop();
     }
-  }, [debounceMs, facingMode, onScan, status, stop]);
+  }, [debounceMs, facingMode, onScan, stop]);
 
   useEffect(() => {
     return () => {
