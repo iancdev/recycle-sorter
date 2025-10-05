@@ -52,6 +52,7 @@ function buildSupportedAdvancedConstraints(track: MediaStreamTrack): MediaTrackC
         focusMode?: string[];
         exposureMode?: string[];
         whiteBalanceMode?: string[];
+        pointsOfInterest?: unknown;
       }
     | undefined;
 
@@ -65,7 +66,45 @@ function buildSupportedAdvancedConstraints(track: MediaStreamTrack): MediaTrackC
   if (caps?.whiteBalanceMode?.includes?.("continuous")) {
     advanced.push({ whiteBalanceMode: "continuous" } as unknown as MediaTrackConstraintSet);
   }
+  // Prefer center screen as a point of interest when supported
+  if (caps && "pointsOfInterest" in caps) {
+    try {
+      advanced.push((
+        { pointsOfInterest: [{ x: 0.5, y: 0.5 }] } as unknown
+      ) as MediaTrackConstraintSet);
+    } catch {
+      // ignore unsupported property
+    }
+  }
   return advanced;
+}
+
+async function applyPointOfInterest(track: MediaStreamTrack): Promise<void> {
+  // Best-effort: constraints path
+  try {
+    if (track.applyConstraints) {
+      await track.applyConstraints((
+        { advanced: [{ pointsOfInterest: [{ x: 0.5, y: 0.5 }] }] } as unknown
+      ) as MediaTrackConstraints);
+      return;
+    }
+  } catch {
+    // fallthrough
+  }
+  // ImageCapture path (not widely supported)
+  try {
+    type ImageCaptureLike = { setOptions?: (opts: unknown) => unknown };
+    const AnyWin = globalThis as unknown as { ImageCapture?: new (t: MediaStreamTrack) => unknown };
+    if (AnyWin.ImageCapture) {
+      const raw = new AnyWin.ImageCapture(track);
+      const ic = raw as unknown as ImageCaptureLike;
+      if (ic && typeof ic.setOptions === "function") {
+        await Promise.resolve(ic.setOptions({ pointsOfInterest: [{ x: 0.5, y: 0.5 }] }));
+      }
+    }
+  } catch {
+    // ignore
+  }
 }
 
 const ZXING_OPTIONS: ReaderOptions = {
@@ -455,6 +494,8 @@ export function useBarcodeScanner(
             console.debug("[barcode] Advanced constraints rejected by browser", constraintError);
           }
         }
+        // Attempt to bias autofocus to center POI
+        await applyPointOfInterest(track).catch(() => undefined);
       }
 
       video.srcObject = stream;
@@ -612,6 +653,8 @@ export function useBarcodeScanner(
             console.debug("[barcode] Advanced constraints rejected on switch", constraintError);
           }
         }
+        // Attempt to bias autofocus to center POI on switch
+        await applyPointOfInterest(track).catch(() => undefined);
       }
       if (video) {
         video.srcObject = stream;
