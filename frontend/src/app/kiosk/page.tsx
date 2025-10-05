@@ -45,6 +45,7 @@ export default function KioskPage(): ReactElement {
   const [countdown, setCountdown] = useState<number | null>(null);
   const [showStartedOverlay, setShowStartedOverlay] = useState(false);
   const [showExpiredOverlay, setShowExpiredOverlay] = useState(false);
+  const [showDiagnosticsPanel, setShowDiagnosticsPanel] = useState(false);
 
   const reset = useKioskStore((state) => state.reset);
   const status = useKioskStore((state) => state.status);
@@ -366,15 +367,21 @@ export default function KioskPage(): ReactElement {
           <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
             <div>
               <h1 className="text-3xl font-semibold tracking-tight text-neutral-50">
-                Recycle Sorter Kiosk
+                Eco Depot
               </h1>
               <p className="text-sm text-neutral-400">
                 Scan your student barcode to start a new recycling session.
               </p>
             </div>
-            <div className="rounded-full border border-neutral-700 bg-neutral-900/80 px-4 py-1 text-xs uppercase tracking-wide text-neutral-300">
+            <button
+              type="button"
+              onClick={() => setShowDiagnosticsPanel((v) => !v)}
+              className="rounded-full border border-neutral-700 bg-neutral-900/80 px-4 py-1 text-xs uppercase tracking-wide text-neutral-300 hover:bg-neutral-800"
+              aria-pressed={showDiagnosticsPanel}
+              aria-label="Toggle diagnostics"
+            >
               Device: {appConfig.edgeDeviceLabel}
-            </div>
+            </button>
           </div>
         </div>
       </header>
@@ -382,9 +389,9 @@ export default function KioskPage(): ReactElement {
       <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-8 py-10 lg:flex-row">
         <section className="flex w-full flex-1 flex-col gap-6">
           <div className="rounded-3xl border border-neutral-800 bg-neutral-900/60 p-8 text-center">
-            <h2 className="text-2xl font-semibold text-neutral-50">Scan your student ID</h2>
+            <h2 className="text-2xl font-semibold text-neutral-50">{status === "ready" ? "Latest item" : "Scan your student ID"}</h2>
             <p className="mt-2 text-sm text-neutral-400">
-              Hold your barcode in front of the camera. Scanning runs in the background.
+              Hold your student ID in front of the camera. Scanning runs in the background.
             </p>
             <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-neutral-700 bg-neutral-900/80 px-4 py-1 text-xs uppercase tracking-wide text-neutral-300">
               <span className="font-medium">Scanner</span>
@@ -531,6 +538,51 @@ export default function KioskPage(): ReactElement {
             )}
           </div>
 
+          {status === "ready" && (
+            <div className="rounded-3xl border border-neutral-800 bg-neutral-900/60 p-6 text-sm text-neutral-200">
+              <h2 className="text-lg font-semibold text-neutral-50">Receipt</h2>
+              {receiptItems.length > 0 ? (
+                <ul className="mt-4 max-h-72 space-y-3 overflow-y-auto pr-1">
+                  {receiptItems.map((item) => {
+                    const category = categories[item.category_id];
+                    return (
+                      <li
+                        key={item.id}
+                        className="rounded-2xl border border-neutral-800 bg-neutral-950/60 px-4 py-3"
+                      >
+                        <div className="flex items-center justify-between text-sm text-neutral-100">
+                          <span className="font-medium">
+                            {category?.display_name ?? "Item"}
+                          </span>
+                          <span className="font-semibold text-sky-300">
+                            {formatCurrencyFromCents(item.amount_cents)}
+                          </span>
+                        </div>
+                        <div className="mt-1 flex items-center justify-between text-xs text-neutral-500">
+                          <span>
+                            {new Date(item.detected_at).toLocaleTimeString([], {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                              second: "2-digit",
+                            })}
+                          </span>
+                          {typeof item.confidence === "number" && (
+                            <span>{Math.round(item.confidence * 100)}%</span>
+                          )}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <p className="mt-4 text-sm text-neutral-400">
+                  Once items are recognised, they will appear here with their
+                  payout and detection confidence.
+                </p>
+              )}
+            </div>
+          )}
+
           <div className="rounded-3xl border border-neutral-800 bg-neutral-900/60 p-6">
             <h2 className="text-lg font-semibold text-neutral-50">Active session</h2>
             {status === "ready" && profile && session ? (
@@ -578,29 +630,31 @@ export default function KioskPage(): ReactElement {
             )}
           </div>
 
-          <div className="rounded-3xl border border-neutral-800 bg-neutral-900/60 p-6 text-sm text-neutral-200">
-            <h2 className="text-lg font-semibold text-neutral-50">Diagnostics</h2>
-            <dl className="mt-4 space-y-3 text-xs">
-              <div className="flex items-center justify-between rounded-2xl border border-neutral-800 bg-neutral-950/70 px-3 py-2">
-                <dt className="uppercase tracking-wide text-neutral-500">Camera</dt>
-                <dd className="text-neutral-100">{SCANNER_STATUS_LABELS[scannerStatus]}</dd>
-              </div>
-              <div className="flex items-center justify-between rounded-2xl border border-neutral-800 bg-neutral-950/70 px-3 py-2">
-                <dt className="uppercase tracking-wide text-neutral-500">Realtime</dt>
-                <dd
-                  className={
-                    realtimeStatus === "error"
-                      ? "text-rose-300"
-                      : realtimeStatus === "online"
-                      ? "text-emerald-300"
-                      : "text-neutral-100"
-                  }
-                >
-                  {REALTIME_STATUS_LABELS[realtimeStatus]}
-                </dd>
-              </div>
-            </dl>
-          </div>
+          {showDiagnosticsPanel && (
+            <div className="rounded-3xl border border-neutral-800 bg-neutral-900/60 p-6 text-sm text-neutral-200">
+              <h2 className="text-lg font-semibold text-neutral-50">Diagnostics</h2>
+              <dl className="mt-4 space-y-3 text-xs">
+                <div className="flex items-center justify-between rounded-2xl border border-neutral-800 bg-neutral-950/70 px-3 py-2">
+                  <dt className="uppercase tracking-wide text-neutral-500">Camera</dt>
+                  <dd className="text-neutral-100">{SCANNER_STATUS_LABELS[scannerStatus]}</dd>
+                </div>
+                <div className="flex items-center justify-between rounded-2xl border border-neutral-800 bg-neutral-950/70 px-3 py-2">
+                  <dt className="uppercase tracking-wide text-neutral-500">Realtime</dt>
+                  <dd
+                    className={
+                      realtimeStatus === "error"
+                        ? "text-rose-300"
+                        : realtimeStatus === "online"
+                        ? "text-emerald-300"
+                        : "text-neutral-100"
+                    }
+                  >
+                    {REALTIME_STATUS_LABELS[realtimeStatus]}
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          )}
 
           <div className="rounded-3xl border border-neutral-800 bg-neutral-900/60 p-6 text-sm text-neutral-200">
             <h2 className="text-lg font-semibold text-neutral-50">Recent sessions</h2>
@@ -630,60 +684,12 @@ export default function KioskPage(): ReactElement {
             )}
           </div>
 
-          <div className="rounded-3xl border border-neutral-800 bg-neutral-900/60 p-6 text-sm text-neutral-200">
-            <h2 className="text-lg font-semibold text-neutral-50">Receipt</h2>
-            {status === "ready" && receiptItems.length > 0 ? (
-              <ul className="mt-4 max-h-72 space-y-3 overflow-y-auto pr-1">
-                {receiptItems.map((item) => {
-                  const category = categories[item.category_id];
-                  return (
-                    <li
-                      key={item.id}
-                      className="rounded-2xl border border-neutral-800 bg-neutral-950/60 px-4 py-3"
-                    >
-                      <div className="flex items-center justify-between text-sm text-neutral-100">
-                        <span className="font-medium">
-                          {category?.display_name ?? "Item"}
-                        </span>
-                        <span className="font-semibold text-sky-300">
-                          {formatCurrencyFromCents(item.amount_cents)}
-                        </span>
-                      </div>
-                      <div className="mt-1 flex items-center justify-between text-xs text-neutral-500">
-                        <span>
-                          {new Date(item.detected_at).toLocaleTimeString([], {
-                            hour: "2-digit",
-                            minute: "2-digit",
-                            second: "2-digit",
-                          })}
-                        </span>
-                        {typeof item.confidence === "number" && (
-                          <span>{Math.round(item.confidence * 100)}%</span>
-                        )}
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            ) : (
-              <>
-                {enableAudioFeedback && (
-                  <p className="mt-4 text-xs text-neutral-500">
-                    Audio feedback idle. Scan an item to generate announcements.
-                  </p>
-                )}
-                <p className="mt-4 text-sm text-neutral-400">
-                  Once items are recognised, they will appear here with their
-                  payout and detection confidence.
-                </p>
-              </>
-            )}
-          </div>
+          
 
           <div className="rounded-3xl border border-neutral-800 bg-neutral-900/60 p-6 text-sm text-neutral-200">
             <h2 className="text-lg font-semibold text-neutral-50">Next steps</h2>
             <ol className="mt-3 list-decimal space-y-2 pl-5 text-neutral-300">
-              <li>Hold the barcode steady in front of the camera.</li>
+              <li>Hold your student ID steady in front of the camera.</li>
               <li>Wait for the kiosk to confirm your account.</li>
               <li>Place the item on the bin platform when the prompt appears. The system will sort it automatically.</li>
             </ol>

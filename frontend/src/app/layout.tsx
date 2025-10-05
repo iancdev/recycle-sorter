@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Recycle Sorter Kiosk",
+  title: "Eco Depot",
   description: "Barcode-based kiosk application",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
