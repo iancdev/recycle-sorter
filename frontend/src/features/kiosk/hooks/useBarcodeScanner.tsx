@@ -22,6 +22,7 @@ interface UseBarcodeScannerResult {
   errorMessage?: string;
   start: () => Promise<void>;
   stop: () => void;
+  switchCamera: () => Promise<void>;
 }
 
 const TARGET_CAMERA_LABEL = "Front Camera";
@@ -141,6 +142,8 @@ export function useBarcodeScanner(
   const lastDecodeAtRef = useRef(0);
   const useBarcodeDetectorRef = useRef(false);
   const barcodeDetectorRef = useRef<BarcodeDetector | null>(null);
+  const devicesRef = useRef<MediaDeviceInfo[]>([]);
+  const currentDeviceIndexRef = useRef<number>(-1);
 
   const [status, setStatus] = useState<ScannerStatus>("idle");
   const statusRef = useRef<ScannerStatus>("idle");
@@ -415,6 +418,28 @@ export function useBarcodeScanner(
       statusRef.current = "scanning";
       console.log("[barcode] Scanner ready and watching for code 128 barcodes");
       setStatus("scanning");
+      // Populate device list for switching
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        devicesRef.current = devices.filter((d) => d.kind === "videoinput");
+        // Try to set current index to the active track's deviceId
+        const activeTrack = stream.getVideoTracks()[0];
+        const activeSettings = activeTrack?.getSettings();
+        const activeDeviceId = (activeSettings?.deviceId as string | undefined) ?? undefined;
+        if (activeDeviceId) {
+          const idx = devicesRef.current.findIndex((d) => d.deviceId === activeDeviceId);
+          currentDeviceIndexRef.current = idx >= 0 ? idx : 0;
+        } else {
+          currentDeviceIndexRef.current = 0;
+        }
+        console.log("[barcode] Video inputs available", {
+          count: devicesRef.current.length,
+          currentIndex: currentDeviceIndexRef.current,
+          labels: devicesRef.current.map((d) => d.label),
+        });
+      } catch (e) {
+        console.warn("[barcode] Unable to enumerate devices after start", e);
+      }
       loop();
     } catch (error) {
       console.error("[barcode] Failed to start scanner", error);
@@ -427,11 +452,71 @@ export function useBarcodeScanner(
     }
   }, [cleanupMedia, decodeCurrentFrame, facingMode]);
 
+  const switchCamera = useCallback(async () => {
+    // Ensure we have a device list; if empty, try to load it
+    if (devicesRef.current.length === 0) {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        devicesRef.current = devices.filter((d) => d.kind === "videoinput");
+      } catch (e) {
+        console.warn("[barcode] Unable to enumerate devices for switching", e);
+        return;
+      }
+    }
+    const n = devicesRef.current.length;
+    if (n === 0) {
+      console.warn("[barcode] No cameras available to switch");
+      return;
+    }
+    // Compute next index
+    const nextIndex = (currentDeviceIndexRef.current + 1) % n;
+    const next = devicesRef.current[nextIndex];
+    if (!next) {
+      console.warn("[barcode] Next camera not found");
+      return;
+    }
+    console.log("[barcode] Switching camera", { to: next.label || next.deviceId, index: nextIndex });
+
+    // Stop existing stream
+    const video = videoRef.current;
+    const oldStream = video?.srcObject instanceof MediaStream ? (video.srcObject as MediaStream) : null;
+    oldStream?.getTracks().forEach((t) => t.stop());
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          deviceId: { exact: next.deviceId },
+          ...BASE_VIDEO_CONSTRAINTS,
+          advanced: ADVANCED_VIDEO_SETTINGS,
+        },
+        audio: false,
+      });
+      const [track] = stream.getVideoTracks();
+      if (track?.applyConstraints) {
+        try {
+          await track.applyConstraints({ advanced: ADVANCED_VIDEO_SETTINGS });
+        } catch (constraintError) {
+          console.warn("[barcode] Unable to apply advanced constraints on switch", constraintError);
+        }
+      }
+      if (video) {
+        video.srcObject = stream;
+        video.playsInline = true;
+        video.muted = true;
+        await video.play().catch(() => undefined);
+      }
+      currentDeviceIndexRef.current = nextIndex;
+    } catch (e) {
+      console.error("[barcode] Failed to switch camera", e);
+    }
+  }, []);
+
   return {
     videoRef,
     status,
     errorMessage,
     start,
     stop,
+    switchCamera,
   };
 }

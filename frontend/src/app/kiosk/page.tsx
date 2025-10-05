@@ -115,6 +115,7 @@ export default function KioskPage(): ReactElement {
     videoRef,
     status: scannerStatus,
     errorMessage: scannerError,
+    switchCamera,
   } = useBarcodeScanner({
     onScan: handleBarcode,
     facingMode: "user",
@@ -270,6 +271,13 @@ export default function KioskPage(): ReactElement {
             >
               Reset kiosk
             </button>
+            <button
+              type="button"
+              onClick={switchCamera}
+              className="rounded-full border border-neutral-700 bg-neutral-800 px-5 py-2 text-xs font-semibold uppercase tracking-wide text-neutral-200 transition hover:bg-neutral-700"
+            >
+              Switch camera
+            </button>
           </div>
         </div>
       )}
@@ -342,6 +350,13 @@ export default function KioskPage(): ReactElement {
                   className="rounded-full border border-neutral-700 bg-neutral-800 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-neutral-200 transition hover:bg-neutral-700"
                 >
                   Reset kiosk
+                </button>
+                <button
+                  type="button"
+                  onClick={switchCamera}
+                  className="rounded-full border border-neutral-700 bg-neutral-800 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-neutral-200 transition hover:bg-neutral-700"
+                >
+                  Switch camera
                 </button>
                 {status === "ready" && session && (
                   <button
