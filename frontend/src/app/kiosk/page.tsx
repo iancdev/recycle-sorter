@@ -519,7 +519,7 @@ export default function KioskPage(): ReactElement {
                   </ul>
                 ) : (
                   <p className="mt-4 text-sm text-neutral-400">
-                    Once items are recognised, they will appear here with their payout and confidence.
+                    Items you have scanned will appear here.
                   </p>
                 )}
               </div>
