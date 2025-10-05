@@ -608,7 +608,12 @@ def recognizeAndValidate(get_frame, image, *, retry_count=1, retry_sleep=0.05):
 def webcamFeed(*, max_frames=None, delay_seconds=0, show_window=True):
     """Continuously read frames from webcam, classify, and command ESP32."""
 
-    grabber = FrameGrabber(index=0)
+    cam_index = 0
+    try:
+        cam_index = int(os.environ.get("CAMERA_INDEX", "0"))
+    except Exception:
+        cam_index = 0
+    grabber = FrameGrabber(index=cam_index)
     grabber.start()
     print("[Webcam] Frame grabber started.")
 
