@@ -62,7 +62,7 @@ function buildSupportedAdvancedConstraints(track: MediaStreamTrack): MediaTrackC
 }
 
 const ZXING_OPTIONS: ReaderOptions = {
-  formats: ["Code128"],
+  formats: ["Codabar"],
   tryHarder: true,
   tryRotate: true,
   tryInvert: true,
@@ -73,7 +73,7 @@ const ZXING_OPTIONS: ReaderOptions = {
 
 const ZXING_FALLBACK_PROFILES: ReadonlyArray<ReaderOptions> = [
   {
-    formats: ["Code128"],
+    formats: ["Codabar"],
     tryHarder: true,
     tryRotate: true,
     tryInvert: true,
@@ -82,7 +82,7 @@ const ZXING_FALLBACK_PROFILES: ReadonlyArray<ReaderOptions> = [
     binarizer: "LocalAverage",
   },
   {
-    formats: ["Code128"],
+    formats: ["Codabar"],
     tryHarder: true,
     tryRotate: true,
     tryInvert: true,
@@ -91,7 +91,7 @@ const ZXING_FALLBACK_PROFILES: ReadonlyArray<ReaderOptions> = [
     binarizer: "GlobalHistogram",
   },
   {
-    formats: ["Code128"],
+    formats: ["Codabar"],
     tryHarder: true,
     tryRotate: true,
     tryInvert: true,
@@ -274,7 +274,7 @@ export function useBarcodeScanner(
     // Draw full frame (no cropping)
     context.drawImage(video, 0, 0, vWidth, vHeight, 0, 0, outputWidth, outputHeight);
 
-    // Fast path: BarcodeDetector if supported for Code 128
+    // Fast path: BarcodeDetector if supported for Codabar
     if (useBarcodeDetectorRef.current && barcodeDetectorRef.current) {
       try {
         const results = await barcodeDetectorRef.current.detect(canvasRef.current);
@@ -435,7 +435,7 @@ export function useBarcodeScanner(
       attemptCounterRef.current = 0;
       lastDecodeAtRef.current = 0;
 
-      // Determine if BarcodeDetector is available for Code 128
+      // Determine if BarcodeDetector is available for Codabar
       useBarcodeDetectorRef.current = false;
       barcodeDetectorRef.current = null;
       try {
@@ -444,12 +444,12 @@ export function useBarcodeScanner(
         if (BD) {
           const supported = BD.getSupportedFormats ? await BD.getSupportedFormats() : [];
           const supportedLower = supported.map((s: string) => s.toLowerCase());
-          const code128 = supportedLower.find((s) => s.includes("code_128") || s.includes("code-128"));
-          if (code128) {
-            const detector = new BD({ formats: [code128] });
+          const codabar = supportedLower.find((s) => s.includes("codabar"));
+          if (codabar) {
+            const detector = new BD({ formats: ["codabar"] });
             barcodeDetectorRef.current = detector;
             useBarcodeDetectorRef.current = true;
-            console.log("[barcode] Using BarcodeDetector fast path", { format: code128 });
+            console.log("[barcode] Using BarcodeDetector fast path", { format: "codabar" });
           }
         }
       } catch {
@@ -496,7 +496,7 @@ export function useBarcodeScanner(
       };
 
       statusRef.current = "scanning";
-      console.log("[barcode] Scanner ready and watching for code 128 barcodes");
+      console.log("[barcode] Scanner ready and watching for Codabar/NW7 barcodes");
       setStatus("scanning");
       // Populate device list for switching
       try {
