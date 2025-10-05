@@ -1,6 +1,7 @@
 import json
 import os
 import time
+import uuid
 
 import cv2
 import requests
@@ -9,7 +10,28 @@ import requests
 from google import genai
 from google.genai import types
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or "AIzaSyDU_Xgbf2GK7WG3FnmkG_faW_gWTdX0asU"
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or ""
+
+SUPABASE_URL = (
+    os.environ.get("SUPABASE_URL")
+    or os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
+    or (
+        os.environ.get("SUPABASE_PROJECT_ID")
+        and f"https://{os.environ['SUPABASE_PROJECT_ID']}.supabase.co"
+    )
+    or ""
+)
+SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY") or ""
+EDGE_DEVICE_LABEL = os.environ.get("EDGE_DEVICE_LABEL") or os.environ.get(
+    "NEXT_PUBLIC_KIOSK_EDGE_DEVICE_LABEL",
+    "demo_kiosk",
+)
+
+CATEGORY_ID_TO_SLUG = {
+    0: "garbage",
+    1: "can",
+    2: "bottle",
+}
 
 
 class ArduinoCloudClient:
@@ -97,6 +119,7 @@ class ArduinoCloudClient:
 
 
 _arduino_client = None
+_edge_device_id = None
 
 
 def get_arduino_client():
@@ -116,6 +139,121 @@ def esp32Command(command):
     except Exception as exc:  # pylint: disable=broad-except
         print(f"[ESP32] Failed to send command: {exc}")
         return 0
+
+
+def _supabase_headers():
+    if not SUPABASE_SERVICE_KEY:
+        raise EnvironmentError(
+            "SUPABASE_SERVICE_KEY must be set for edge to publish classifications."
+        )
+
+    return {
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "Content-Type": "application/json",
+    }
+
+
+def _get_edge_device_id():
+    global _edge_device_id
+    if _edge_device_id or not SUPABASE_URL:
+        return _edge_device_id
+
+    if not EDGE_DEVICE_LABEL:
+        raise EnvironmentError("EDGE_DEVICE_LABEL must be provided")
+
+    response = requests.get(
+        f"{SUPABASE_URL}/rest/v1/edge_devices",
+        params={"label": f"eq.{EDGE_DEVICE_LABEL}", "select": "id"},
+        headers=_supabase_headers(),
+        timeout=10,
+    )
+    response.raise_for_status()
+    data = response.json()
+    if not data:
+        raise RuntimeError(
+            f"Edge device with label '{EDGE_DEVICE_LABEL}' not found in Supabase."
+        )
+
+    _edge_device_id = data[0]["id"]
+    print(f"[Supabase] Edge device id resolved: {_edge_device_id}")
+    return _edge_device_id
+
+
+def _get_active_session_id():
+    if not SUPABASE_URL:
+        print("[Supabase] SUPABASE_URL not configured; cannot fetch active session")
+        return None
+
+    try:
+        edge_device_id = _get_edge_device_id()
+    except Exception as exc:  # pylint: disable=broad-except
+        print(f"[Supabase] Failed to resolve edge device id: {exc}")
+        edge_device_id = None
+
+    params = {
+        "status": "eq.active",
+        "select": "id,edge_device_id,started_at",
+        "limit": 1,
+        "order": "started_at.desc",
+    }
+
+    if edge_device_id:
+        params["edge_device_id"] = f"eq.{edge_device_id}"
+
+    try:
+        response = requests.get(
+            f"{SUPABASE_URL}/rest/v1/sessions",
+            params=params,
+            headers=_supabase_headers(),
+            timeout=10,
+        )
+        response.raise_for_status()
+        data = response.json()
+        if not data:
+            print("[Supabase] No active session found for this edge device.")
+            return None
+        return data[0]["id"]
+    except Exception as exc:  # pylint: disable=broad-except
+        print(f"[Supabase] Failed to fetch active session: {exc}")
+        return None
+
+
+def publish_classification(category_slug, confidence=None, raw_payload=None):
+    if not SUPABASE_URL:
+        print("[Supabase] SUPABASE_URL missing; classification not published")
+        return False
+
+    session_id = _get_active_session_id()
+    if not session_id:
+        print("[Supabase] Skipping publish because there is no active session.")
+        return False
+
+    payload = {
+        "sessionId": session_id,
+        "categorySlug": category_slug,
+        "confidence": confidence,
+        "rawPayload": raw_payload or {},
+        "clientRef": str(uuid.uuid4()),
+    }
+
+    try:
+        response = requests.post(
+            f"{SUPABASE_URL}/functions/v1/record-item",
+            headers=_supabase_headers(),
+            json=payload,
+            timeout=15,
+        )
+        if response.status_code >= 400:
+            print(
+                f"[Supabase] record-item failed: {response.status_code} {response.text.strip()}"
+            )
+            return False
+        print("[Supabase] Classification published for session", session_id)
+        return True
+    except Exception as exc:  # pylint: disable=broad-except
+        print(f"[Supabase] Failed to publish classification: {exc}")
+        return False
 
 def webcamFeed(*, max_frames=None, delay_seconds=0, show_window=False):
     """Continuously read frames from webcam, classify, and command ESP32."""
@@ -142,6 +280,19 @@ def webcamFeed(*, max_frames=None, delay_seconds=0, show_window=False):
                     break
 
             category_id = recognizeImage(frame)
+            category_slug = CATEGORY_ID_TO_SLUG.get(category_id, "garbage")
+
+            raw_payload = {
+                "recognized_category_id": category_id,
+                "source": "edge-computer",
+            }
+
+            publish_classification(
+                category_slug=category_slug,
+                confidence=None,
+                raw_payload=raw_payload,
+            )
+
             esp32Command(category_id)
             processed += 1
 
@@ -177,9 +328,10 @@ def recognizeImage(image):
     if not GEMINI_API_KEY:
         raise EnvironmentError("GEMINI_API_KEY is not set in the environment.")
 
-    client = genai.Client(
-       api_key=GEMINI_API_KEY,
-    )
+    if not GEMINI_API_KEY:
+        raise EnvironmentError("GEMINI_API_KEY must be set for edge recognition.")
+
+    client = genai.Client(api_key=GEMINI_API_KEY)
     model = "gemini-flash-latest"
     image_part = _image_to_part(image)
     contents = [
@@ -236,9 +388,9 @@ Only recognize and categorize the primary object presented. If the primary objec
     except json.JSONDecodeError as exc:
         raise ValueError(f"Failed to decode Gemini JSON response: {raw_result}") from exc
 
-    category_id = parsed["recognized_category_id"]
+    category_id = int(parsed["recognized_category_id"])
     print(f"[Gemini] Recognized image as category ID: {category_id}")
-    return int(category_id)
+    return category_id
 
 def main():
     """
