@@ -84,7 +84,7 @@ class SerialESP32Client:
         "ttyusb",
     )
 
-    def __init__(self, *, com_override=None, baudrate=ESP32_BAUDRATE, timeout=2.0):
+    def __init__(self, *, com_override=None, baudrate=ESP32_BAUDRATE, timeout=0.1):
         self._com_override = (com_override or "").strip() or None
         self._baudrate = baudrate
         self._timeout = timeout
@@ -192,16 +192,21 @@ class SerialESP32Client:
             raise RuntimeError(f"Failed to read from ESP32 over serial: {exc}") from exc
 
     def _reader_loop(self):
-        conn = self._ensure_connection()
         while not self._stop_event.is_set():
             try:
+                # Ensure we have a live connection each iteration
+                if not self._serial or not self._serial.is_open:
+                    self._ensure_connection()
+                conn = self._serial
+                if conn is None:
+                    time.sleep(0.05)
+                    continue
                 raw = conn.readline()
                 if not raw:
                     # Timeout reached; loop
                     continue
                 text = raw.decode("utf-8", errors="replace").strip()
                 if not text:
-                    print(f"[ESP32] Invalid state line: {text}")
                     continue
                 with self._state_lock:
                     self._lines_buffer.append(text)
@@ -209,7 +214,6 @@ class SerialESP32Client:
                     if m:
                         a, b = m.group(1), m.group(2)
                         self._last_state_line = text
-                        print(f"[ESP32] Latest state: text {text}, a {a}, b {b}")
                         self._last_state_tuple = (a == "1", b == "1")
             except Exception:
                 # Soft-fail; brief sleep to avoid tight loop on error
@@ -224,6 +228,11 @@ class SerialESP32Client:
 
     def get_latest_state(self):
         """Return the latest parsed (isMoving, isTriggered) after draining input."""
+        # Ensure connection and reader are active
+        try:
+            self._ensure_connection()
+        except Exception:
+            pass
         with self._state_lock:
             return self._last_state_tuple
 
