@@ -1,12 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  prepareZXingModule,
-  readBarcodes,
-} from "zxing-wasm/reader";
-import type { ReadResult } from "zxing-wasm/reader";
-import { type ReaderOptions } from "zxing-wasm/reader";
+import { prepareZXingModule, readBarcodes } from "zxing-wasm";
+import type { ReadResult, ReaderOptions } from "zxing-wasm";
 
 type ScannerStatus = "idle" | "requesting" | "scanning" | "error";
 
