@@ -26,7 +26,7 @@ interface UseBarcodeScannerResult {
   switchCamera: () => Promise<void>;
 }
 
-const TARGET_CAMERA_LABEL = "Front Camera";
+const TARGET_CAMERA_LABEL = "Front Ultra Wide Camera";
 const MAX_FRAME_DIMENSION = 1920;
 const DEFAULT_DECODE_INTERVAL_MS = 80; // ~12.5 fps
 const MAX_DEBUG_SAMPLES = 10;
