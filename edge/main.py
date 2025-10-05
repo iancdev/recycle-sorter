@@ -410,10 +410,39 @@ def currentState():
         return False, False
     
 
+def _open_camera(index=0):
+    """Open camera consistently using the same backend; prefer DirectShow on Windows.
+
+    Falls back to default backend if DirectShow fails. Attempts to reduce buffer
+    latency by setting CAP_PROP_BUFFERSIZE to 1 when supported.
+    """
+    cap = None
+    try:
+        # Prefer DirectShow on Windows for stability with USB cameras
+        cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
+        if not cap.isOpened():
+            cap.release()
+            cap = cv2.VideoCapture(index)
+    except Exception:
+        if cap is not None:
+            try:
+                cap.release()
+            except Exception:
+                pass
+        cap = cv2.VideoCapture(index)
+
+    # Try to reduce buffering, ignore if not supported
+    try:
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    except Exception:
+        pass
+    return cap
+
+
 def webcamFeed(*, max_frames=None, delay_seconds=0, show_window=True):
     """Continuously read frames from webcam, classify, and command ESP32."""
 
-    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+    cap = _open_camera(0)
     if not cap.isOpened():
         raise RuntimeError("Unable to open webcam (device index 0).")
 
@@ -444,7 +473,7 @@ def webcamFeed(*, max_frames=None, delay_seconds=0, show_window=True):
                 )
                 cap.release()
                 time.sleep(max(frame_retry_sleep, 1.0))
-                cap = cv2.VideoCapture(0)
+                cap = _open_camera(0)
                 if not cap.isOpened():
                     cap.release()
                     if reopen_attempts >= max_reopen_attempts:
