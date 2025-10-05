@@ -269,6 +269,7 @@ def publish_classification(category_slug, confidence=None, raw_payload=None):
         print(f"[Supabase] Failed to publish classification: {exc}")
         return False
 
+
 def webcamFeed(*, max_frames=None, delay_seconds=0, show_window=False):
     """Continuously read frames from webcam, classify, and command ESP32."""
 
@@ -281,11 +282,45 @@ def webcamFeed(*, max_frames=None, delay_seconds=0, show_window=False):
         cv2.resizeWindow("Recycle Sorter", 960, 540)
 
     processed = 0
+    consecutive_failures = 0
+    reopen_attempts = 0
+    max_consecutive_failures = 5
+    max_reopen_attempts = 3
+    frame_retry_sleep = 0.5
+
     try:
         while True:
             ok, frame = cap.read()
             if not ok:
-                raise RuntimeError("Failed to read frame from webcam.")
+                consecutive_failures += 1
+                print(f"[Webcam] Failed to read frame (attempt {consecutive_failures}). Retrying.")
+                if consecutive_failures < max_consecutive_failures:
+                    time.sleep(frame_retry_sleep)
+                    continue
+
+                reopen_attempts += 1
+                print(
+                    f"[Webcam] Reinitializing camera (attempt {reopen_attempts}/{max_reopen_attempts})."
+                )
+                cap.release()
+                time.sleep(max(frame_retry_sleep, 1.0))
+                cap = cv2.VideoCapture(0)
+                if not cap.isOpened():
+                    cap.release()
+                    if reopen_attempts >= max_reopen_attempts:
+                        raise RuntimeError(
+                            "Unable to recover webcam stream after multiple attempts."
+                        )
+                    print("[Webcam] Reopen attempt failed; will retry.")
+                    time.sleep(1.0)
+                    continue
+
+                consecutive_failures = 0
+                time.sleep(frame_retry_sleep)
+                continue
+
+            consecutive_failures = 0
+            reopen_attempts = 0
 
             if show_window:
                 cv2.imshow("Recycle Sorter", frame)
