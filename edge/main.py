@@ -2,6 +2,7 @@ import json
 import os
 import time
 import uuid
+import re
 
 import cv2
 import requests
@@ -11,7 +12,7 @@ try:
     from serial.tools import list_ports
 except ImportError as exc: 
     raise ImportError(
-        "pyserial must be installed to use serial ESP32 communication"
+        "pyserial must be installed to use serial communication"
     ) from exc
 
 # Gemini requirements
@@ -54,20 +55,38 @@ CATEGORY_ID_TO_SLUG = {
     3: "garbage",
 }
 
-ESP32_BAUDRATE = 115200
-ESP32_COM_PORT_OVERRIDE = None
+ESP32_BAUDRATE = 9600
+# Allow override via common env names when using Arduino/USB-serial devices
+ESP32_COM_PORT_OVERRIDE = (
+    os.environ.get("SERIAL_PORT")
+    or os.environ.get("ARDUINO_PORT")
+    or os.environ.get("ESP32_COM_PORT")
+    or os.environ.get("ESP32_COM_PORT_OVERRIDE")
+    or None
+)
 
 
 class SerialESP32Client:
     """Handle direct serial communication with the ESP32 controller."""
 
     _PREFERRED_KEYWORDS = (
+        # Common Arduino/ESP32/USB-serial identifiers
+        "arduino",
         "esp",
         "cp210",
-        "usb",
         "ch340",
+        "ftdi",
+        "ft232",
+        "wch",
         "silicon labs",
+        # Generic USB serial hints
+        "usbserial",
+        "usb modem",
+        "usbmodem",
         "serial",
+        # Some OS-specific tokens
+        "ttyacm",
+        "ttyusb",
     )
 
     def __init__(self, *, com_override=None, baudrate=ESP32_BAUDRATE, timeout=2.0):
@@ -86,12 +105,17 @@ class SerialESP32Client:
         if not ports:
             raise RuntimeError("No serial ports detected while auto-discovering ESP32.")
 
-        prioritized = [
-            port
-            for port in ports
-            if any(keyword in (port.description or "").lower() for keyword in self._PREFERRED_KEYWORDS)
-            or any(keyword in (port.manufacturer or "").lower() for keyword in self._PREFERRED_KEYWORDS)
-        ]
+        def _matches(port):
+            desc = (port.description or "").lower()
+            manu = (port.manufacturer or "").lower()
+            dev = (getattr(port, "device", "") or "").lower()
+            return (
+                any(keyword in desc for keyword in self._PREFERRED_KEYWORDS)
+                or any(keyword in manu for keyword in self._PREFERRED_KEYWORDS)
+                or any(keyword in dev for keyword in ("usbmodem", "usbserial", "ttyacm", "ttyusb", "cu.usb", "tty.usb"))
+            )
+
+        prioritized = [port for port in ports if _matches(port)]
 
         selected = prioritized[0] if prioritized else ports[0]
         print(f"[ESP32] Auto-detected serial port: {selected.device} ({selected.description})")
@@ -138,11 +162,20 @@ class SerialESP32Client:
             if connection:
                 try:
                     connection.close()
-                except Exception:  # pragma: no cover - best effort cleanup
+                except Exception:
                     pass
                 self._serial = None
             raise RuntimeError(f"Failed to write to ESP32 over serial: {exc}") from exc
         return True
+
+    def read_line(self):
+        """Read a single newline-terminated line from serial, decoded as UTF-8."""
+        connection = self._ensure_connection()
+        try:
+            raw = connection.readline()
+            return raw.decode("utf-8", errors="replace").strip()
+        except serial.SerialException as exc:
+            raise RuntimeError(f"Failed to read from ESP32 over serial: {exc}") from exc
 
 
 _serial_client = None
@@ -163,7 +196,7 @@ def esp32Command(command):
         client = get_serial_client()
         client.send_command(command)
         return 1
-    except Exception as exc:  # pylint: disable=broad-except
+    except Exception as exc: 
         print(f"[ESP32] Failed to send command: {exc}")
         return 0
 
@@ -278,10 +311,39 @@ def publish_classification(category_slug, confidence=None, raw_payload=None):
             return False
         print("[Supabase] Classification published for session", session_id)
         return True
-    except Exception as exc:  # pylint: disable=broad-except
+    except Exception as exc:
         print(f"[Supabase] Failed to publish classification: {exc}")
         return False
+_STATE_RE = re.compile(r"\(?\s*([01])\s*[,\s]\s*([01])\s*\)?")
 
+def currentState():
+    """Read and parse device state as (isMoving, isTriggered) booleans.
+
+    Expected formats: "0,1", "(0,1)", or with whitespace. Returns (False, True) for "0,1".
+    Unparseable or empty lines return (False, False) by default.
+    """
+    try:
+        line = get_serial_client().read_line()
+    except Exception as exc:  # pylint: disable=broad-except
+        print(f"[ESP32] Read error: {exc}")
+        return False, False
+
+    if not line:
+        return False, False
+
+    m = _STATE_RE.search(line)
+    if not m:
+        # Fallback: try to split on comma and coerce
+        parts = [p.strip() for p in line.strip("() ").split(",")]
+        if len(parts) >= 2 and all(p in ("0", "1") for p in parts[:2]):
+            a, b = parts[0], parts[1]
+            return (a == "1"), (b == "1")
+        print(f"[ESP32] Unrecognized state '{line}', defaulting to (0,0)")
+        return False, False
+
+    a, b = m.group(1), m.group(2)
+    return (a == "1"), (b == "1")
+    
 
 def webcamFeed(*, max_frames=None, delay_seconds=0, show_window=False):
     """Continuously read frames from webcam, classify, and command ESP32."""
@@ -341,7 +403,29 @@ def webcamFeed(*, max_frames=None, delay_seconds=0, show_window=False):
                     print("[Webcam] Quit signal received.")
                     break
 
-            category_id = recognizeImage(frame)
+            # Wait for ultrasonic trigger from serial: (isMoving, isTriggered)
+            isMoving, isTriggered = currentState()
+            while not isTriggered:
+                # Keep UI responsive and avoid busy-wait
+                if show_window:
+                    ok2, frame2 = cap.read()
+                    if ok2:
+                        cv2.imshow("Recycle Sorter", frame2)
+                        if cv2.waitKey(1) & 0xFF == ord("q"):
+                            print("[Webcam] Quit signal received.")
+                            raise KeyboardInterrupt
+                time.sleep(0.05)
+                isMoving, isTriggered = currentState()
+
+            print("[Webcam] Trigger received.")
+            # Capture a fresh frame at trigger time
+            ok3, frame3 = cap.read()
+            if ok3:
+                frame_to_use = frame3
+            else:
+                frame_to_use = frame
+
+            category_id = recognizeImage(frame_to_use)
             category_slug = CATEGORY_ID_TO_SLUG.get(category_id, "garbage")
 
             raw_payload = {
@@ -356,6 +440,14 @@ def webcamFeed(*, max_frames=None, delay_seconds=0, show_window=False):
             )
 
             esp32Command(category_id)
+            print(f"[ESP32] Command sent to ESP32: {category_id}")
+
+            # Wait for movement to stop (isMoving becomes 0)
+            isMoving, isTriggered = currentState()
+            while isMoving:
+                time.sleep(0.05)
+                isMoving, isTriggered = currentState()
+            print("[ESP32] Movement completed.")
             processed += 1
 
             if max_frames is not None and processed >= max_frames:
