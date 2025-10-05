@@ -421,23 +421,19 @@ def _open_camera(index=0):
     backend_tried = []
     try:
         if platform.system() == "Windows":
-            # Prefer MSMF first; fallback to DirectShow, then default
-            for backend in (getattr(cv2, "CAP_MSMF", 1400), cv2.CAP_DSHOW, 0):
+            # Prefer DirectShow first on Windows; then MSMF; finally default
+            backends = []
+            if hasattr(cv2, "CAP_DSHOW"):
+                backends.append(cv2.CAP_DSHOW)
+            if hasattr(cv2, "CAP_MSMF"):
+                backends.append(cv2.CAP_MSMF)
+            backends.append(0)  # default
+
+            for backend in backends:
                 backend_tried.append(backend)
                 try:
                     c = cv2.VideoCapture(index, backend)
                     if c.isOpened():
-                        # Try to set a common format to avoid black frames
-                        try:
-                            c.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-                        except Exception:
-                            pass
-                        # Optional: modest default resolution if supported
-                        try:
-                            c.set(cv2.CAP_PROP_FRAME_WIDTH, float(os.environ.get("CAMERA_WIDTH", 1280)))
-                            c.set(cv2.CAP_PROP_FRAME_HEIGHT, float(os.environ.get("CAMERA_HEIGHT", 720)))
-                        except Exception:
-                            pass
                         cap = c
                         break
                     else:
@@ -495,21 +491,6 @@ class FrameGrabber:
         self._cap = _open_camera(self._index)
         if not self._cap or not self._cap.isOpened():
             raise RuntimeError("Unable to open webcam (device index 0).")
-        # Warm up: some Windows drivers output black frames initially
-        try:
-            warmup_tries = 20
-            while warmup_tries > 0:
-                ok, frame = self._cap.read()
-                if ok and frame is not None:
-                    with self._lock:
-                        self._latest = frame
-                        self._latest_ts = time.time()
-                        self._ok = True
-                    break
-                warmup_tries -= 1
-                time.sleep(0.02)
-        except Exception:
-            pass
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, name="FrameGrabber", daemon=True)
         self._thread.start()
@@ -629,10 +610,12 @@ def webcamFeed(*, max_frames=None, delay_seconds=0, show_window=True):
 
     grabber = FrameGrabber(index=0)
     grabber.start()
+    print("[Webcam] Frame grabber started.")
 
     if show_window:
         cv2.namedWindow("Recycle Sorter", cv2.WINDOW_NORMAL)
         cv2.resizeWindow("Recycle Sorter", 960, 540)
+        print("[Webcam] Preview window created.")
 
     processed = 0
 
