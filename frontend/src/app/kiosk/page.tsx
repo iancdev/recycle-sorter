@@ -104,7 +104,7 @@ export default function KioskPage(): ReactElement {
       });
       useKioskStore.getState().setReady(payload);
       setShowStartedOverlay(true);
-      window.setTimeout(() => setShowStartedOverlay(false), 3000);
+      window.setTimeout(() => setShowStartedOverlay(false), 750);
     } catch (error) {
       console.error("[barcode] Failed to authenticate barcode", error);
       const message =
@@ -223,6 +223,16 @@ export default function KioskPage(): ReactElement {
     }
   }, [showEndedOverlay, reset]);
 
+  // Auto-dismiss expired overlay after 0.75s
+  useEffect(() => {
+    if (showExpiredOverlay) {
+      const t = window.setTimeout(() => {
+        setShowExpiredOverlay(false);
+      }, 750);
+      return () => window.clearTimeout(t);
+    }
+  }, [showExpiredOverlay]);
+
   const handleCloseSession = useCallback(async () => {
     if (isClosing) {
       return;
@@ -320,29 +330,18 @@ export default function KioskPage(): ReactElement {
         </div>
       )}
       {showStartedOverlay && (
-        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-neutral-950/70 px-8 text-center animate-fade-3s">
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-neutral-950/80 px-8 text-center animate-fade-075">
           <h2 className="text-2xl font-semibold text-emerald-200">Session started</h2>
           <p className="text-sm text-neutral-200">You can begin scanning items.</p>
         </div>
       )}
       {showExpiredOverlay && (
-        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-neutral-950/90 px-8 text-center animate-fade-3s">
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-neutral-950/80 px-8 text-center animate-fade-075">
           <h2 className="text-2xl font-semibold text-neutral-100">Session expired</h2>
           <p className="max-w-md text-sm text-neutral-300">
             Your session expired due to inactivity. Tap below to start a new session.
           </p>
-          <div className="flex flex-wrap items-center justify-center gap-3">
-            <button
-              type="button"
-              onClick={() => {
-                setShowExpiredOverlay(false);
-                reset();
-              }}
-              className="rounded-full border border-neutral-700 bg-neutral-800 px-5 py-2 text-xs font-semibold uppercase tracking-wide text-neutral-200 transition hover:bg-neutral-700"
-            >
-              Start new session
-            </button>
-          </div>
+          <div className="h-5" />
         </div>
       )}
       {showEndedOverlay && (

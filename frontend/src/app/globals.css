@@ -24,3 +24,19 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Simple fade in, hold, fade out animation for overlays */
+@keyframes fadeOverlay {
+  0% { opacity: 0; }
+  10% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.animate-fade-3s {
+  animation: fadeOverlay 3s ease-in-out forwards;
+}
+
+.animate-fade-075 {
+  animation: fadeOverlay 0.75s ease-in-out forwards;
+}
