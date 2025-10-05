@@ -727,6 +727,29 @@ def _encode_jpeg(image):
         raise ValueError("Failed to encode image frame to JPEG for request.")
     return buffer.tobytes()
 
+def _parse_workflow_from_url(url):
+    """Return (workspace, workflow_id) parsed from a Roboflow Workflows URL or None.
+
+    Accepts editor URLs (app.roboflow.com/<workspace>/workflows/edit/<workflow>)
+    and API-like paths (/workflows/<workspace>/<workflow> or /<workspace>/workflows/<workflow>).
+    """
+    try:
+        from urllib.parse import urlparse
+        p = urlparse(url)
+        parts = [x for x in p.path.split("/") if x]
+        # app.roboflow.com/<workspace>/workflows/edit/<workflow>
+        if p.netloc.lower().startswith("app.roboflow.com") and len(parts) >= 4 and parts[1] == "workflows" and parts[2] == "edit":
+            return parts[0], parts[3]
+        # api/workflows/<workspace>/<workflow>
+        if len(parts) >= 3 and parts[0] == "workflows":
+            return parts[1], parts[2]
+        # api/<workspace>/workflows/<workflow>
+        if len(parts) >= 3 and parts[1] == "workflows":
+            return parts[0], parts[2]
+    except Exception:
+        pass
+    return None, None
+
 def _normalize_roboflow_url(url, api_key, confidence=None):
     """Return a proper Roboflow inference URL.
 
@@ -750,6 +773,7 @@ def _normalize_roboflow_url(url, api_key, confidence=None):
             if len(parts) >= 4 and parts[1] == "workflows" and parts[2] == "edit":
                 workspace = parts[0]
                 workflow = parts[3]
+                # Do not assume /workflows/<workspace>/<workflow> order; keep as editor but mark for parsing
                 path = f"/workflows/{workspace}/{workflow}"
                 netloc = "api.roboflow.com"
 
@@ -834,6 +858,38 @@ def recognizeImage(image):
         raise EnvironmentError("ROBOFLOW_API_KEY must be set for Roboflow recognition.")
 
     image_bytes = _encode_jpeg(image)
+
+    # Prefer local Inference Server via SDK if configured
+    inference_api_url = os.environ.get("ROBOFLOW_INFERENCE_API_URL") or os.environ.get("INFERENCE_API_URL") or ""
+    if inference_api_url:
+        try:
+            from inference_sdk import InferenceHTTPClient  # type: ignore
+            ws, wf = _parse_workflow_from_url(ROBOFLOW_MODEL_URL)
+            ws = os.environ.get("ROBOFLOW_WORKSPACE", ws or "")
+            wf = os.environ.get("ROBOFLOW_WORKFLOW_ID", wf or "")
+            if not ws or not wf:
+                raise ValueError("Unable to determine workflow id from ROBOFLOW_MODEL_URL; set ROBOFLOW_WORKSPACE and ROBOFLOW_WORKFLOW_ID.")
+            client = InferenceHTTPClient(api_url=inference_api_url, api_key=ROBOFLOW_API_KEY)
+            # SDK encodes bytes internally when provided directly
+            result = client.run_workflow(
+                workspace_name=ws,
+                workflow_id=wf,
+                images={"image": image_bytes},
+                parameters={},
+            )
+            # Heuristically parse result
+            label, conf = _find_best_prediction(result)
+            if not label and isinstance(result, list) and result:
+                label, conf = _find_best_prediction(result[0])
+            if label:
+                category_id = _label_to_category_id(label)
+                print(f"[Roboflow] (local) Top label '{label}' (conf={conf}) ⇒ category ID {category_id}")
+                return category_id
+            print("[Roboflow] (local) No predictions found; defaulting to garbage (3)")
+            return 3
+        except Exception as exc:
+            print(f"[Roboflow] Local inference SDK call failed: {exc}")
+
     url = _normalize_roboflow_url(ROBOFLOW_MODEL_URL, ROBOFLOW_API_KEY, ROBOFLOW_CONFIDENCE)
     print(f"[Roboflow] POST {url}")
     result = None
