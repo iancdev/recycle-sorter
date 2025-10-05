@@ -588,7 +588,9 @@ def recognizeAndValidate(get_frame, image, *, retry_count=1, retry_sleep=0.05):
     # Mismatch or both failed; retry once if allowed
     if retry_count > 0:
         time.sleep(max(0.0, retry_sleep))
-        frame2 = get_frame(copy=True) or image
+        frame2 = get_frame(copy=True)
+        if frame2 is None:
+            frame2 = image
         try:
             rf2 = recognizeImage(frame2)
         except Exception as exc:
