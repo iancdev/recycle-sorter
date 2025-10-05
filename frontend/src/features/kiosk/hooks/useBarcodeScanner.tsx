@@ -28,7 +28,7 @@ interface UseBarcodeScannerResult {
 
 const TARGET_CAMERA_LABEL = "Front Camera";
 const MAX_FRAME_DIMENSION = 1920;
-const DEFAULT_DECODE_INTERVAL_MS = 15;
+const DEFAULT_DECODE_INTERVAL_MS = 5;
 const MAX_DEBUG_SAMPLES = 10;
 
 const BASE_VIDEO_CONSTRAINTS: Pick<MediaTrackConstraints, "width" | "height" | "frameRate" | "aspectRatio"> = {
