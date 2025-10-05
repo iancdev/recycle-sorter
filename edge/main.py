@@ -753,12 +753,15 @@ def _normalize_roboflow_url(url, api_key, confidence=None):
                 path = f"/workflows/{workspace}/{workflow}"
                 netloc = "api.roboflow.com"
 
-        # Rebuild query with api_key + confidence
+        # Rebuild query with api_key + confidence (+ format=json for detect/classify hosts)
         query = dict(parse_qsl(parsed.query, keep_blank_values=True))
         if api_key and "api_key" not in query:
             query["api_key"] = api_key
         if confidence is not None and "confidence" not in query:
             query["confidence"] = str(confidence)
+        # Ensure JSON responses from detect/classify endpoints
+        if any(h in netloc for h in ("detect.roboflow.com", "classify.roboflow.com", "segment.roboflow.com")) and "format" not in query:
+            query["format"] = "json"
 
         new = parsed._replace(netloc=netloc, path=path, query=urlencode(query))
         return urlunparse(new)
@@ -834,7 +837,6 @@ def recognizeImage(image):
     url = _normalize_roboflow_url(ROBOFLOW_MODEL_URL, ROBOFLOW_API_KEY, ROBOFLOW_CONFIDENCE)
     print(f"[Roboflow] POST {url}")
     result = None
-    last_exc = None
     try:
         files = {"file": ("frame.jpg", image_bytes, "image/jpeg")}
         headers = {"Accept": "application/json"}
@@ -847,8 +849,7 @@ def recognizeImage(image):
         except Exception:
             result = json.loads(text)
     except Exception as exc:
-        last_exc = exc
-        print(f"[Roboflow] Multipart upload failed; retrying as form body: {exc}")
+        print(f"[Roboflow] Multipart upload failed; retrying as base64 form: {exc}")
         try:
             # Alternate path used by some endpoints: send as form field 'image' (base64)
             import base64
