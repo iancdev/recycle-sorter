@@ -2,6 +2,7 @@
 
 import { BrowserMultiFormatReader } from "@zxing/browser";
 import type { IScannerControls } from "@zxing/browser";
+import { BarcodeFormat, DecodeHintType } from "@zxing/library";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 type ScannerStatus = "idle" | "requesting" | "scanning" | "error";
@@ -20,22 +21,24 @@ interface UseBarcodeScannerResult {
   stop: () => void;
 }
 
-async function selectFrontCamera(facingMode: "user" | "environment") {
+async function selectFrontCamera(fallbackFacingMode: "user" | "environment"): Promise<MediaTrackConstraints> {
   try {
     const devices = await navigator.mediaDevices.enumerateDevices();
-    const videoDevices = devices.filter((device) => device.kind === "videoinput");
-    const exactMatch = videoDevices.find(
-      (device) => device.label.trim() === "Front Facing Camera",
+    const frontFacing = devices.find(
+      (device) =>
+        device.kind === "videoinput" && device.label.trim() === "Front Facing Camera",
     );
 
-    if (exactMatch) {
-      return { deviceId: { exact: exactMatch.deviceId } };
+    if (frontFacing) {
+      return {
+        deviceId: { exact: frontFacing.deviceId },
+      };
     }
   } catch (error) {
     console.warn("Unable to enumerate media devices", error);
   }
 
-  return { facingMode };
+  return { facingMode: { ideal: fallbackFacingMode } };
 }
 
 
@@ -90,17 +93,16 @@ export function useBarcodeScanner(
       setErrorMessage(undefined);
 
       const videoConstraints = await selectFrontCamera(facingMode);
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: videoConstraints,
-        audio: false,
-      });
-      videoRef.current.srcObject = stream;
-
-      const reader = new BrowserMultiFormatReader();
+      const hints = new Map();
+      hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.CODE_128]);
+      const reader = new BrowserMultiFormatReader(hints);
       readerRef.current = reader;
 
-      controlsRef.current = await reader.decodeFromVideoDevice(
-        undefined,
+      controlsRef.current = await reader.decodeFromConstraints(
+        {
+          video: videoConstraints,
+          audio: false,
+        },
         videoRef.current,
         (result, error) => {
           if (result) {
