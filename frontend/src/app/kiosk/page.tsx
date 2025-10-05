@@ -381,35 +381,20 @@ export default function KioskPage(): ReactElement {
 
       <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-8 py-10 lg:flex-row">
         <section className="flex w-full flex-1 flex-col gap-6">
-          <div className="relative aspect-[4/3] overflow-hidden rounded-3xl border border-neutral-800 bg-black">
-            <video
-              ref={videoRef}
-              className="h-full w-full object-cover"
-              muted
-              playsInline
-              autoPlay
-            />
-            <div className="pointer-events-none absolute inset-x-6 bottom-6 rounded-2xl bg-neutral-900/80 px-4 py-3 text-sm text-neutral-200 shadow-lg">
-              <div className="flex items-center justify-between">
-                <span className="font-medium">Scanner status</span>
-                <span className="text-neutral-100">{scannerLabel}</span>
-              </div>
-              {scannerError ? (
-                <p className="mt-2 text-xs text-rose-400">{scannerError}</p>
-              ) : (
-                <>
-                  {enableAudioFeedback && (
-                    <p className="mt-2 text-xs text-neutral-500">
-                      Audio feedback idle. Scan an item to generate announcements.
-                    </p>
-                  )}
-                  <p className="mt-2 text-xs text-neutral-400">
-                    Hold your card in front of the camera until it beeps. The
-                    front-facing camera is optimised for landscape orientation.
-                  </p>
-                </>
-              )}
+          <div className="rounded-3xl border border-neutral-800 bg-neutral-900/60 p-8 text-center">
+            <h2 className="text-2xl font-semibold text-neutral-50">Scan your student ID</h2>
+            <p className="mt-2 text-sm text-neutral-400">
+              Hold your barcode in front of the camera. Scanning runs in the background.
+            </p>
+            <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-neutral-700 bg-neutral-900/80 px-4 py-1 text-xs uppercase tracking-wide text-neutral-300">
+              <span className="font-medium">Scanner</span>
+              <span className="text-neutral-100">{scannerLabel}</span>
             </div>
+            {scannerError && (
+              <p className="mt-3 text-xs text-rose-400">{scannerError}</p>
+            )}
+            {/* Hidden video element to drive the scanner without showing preview */}
+            <video ref={videoRef} className="hidden" muted playsInline autoPlay />
           </div>
 
           <div className="rounded-3xl border border-neutral-800 bg-neutral-900/60 p-5 text-sm text-neutral-200">
