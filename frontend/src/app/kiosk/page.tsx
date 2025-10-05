@@ -104,7 +104,7 @@ export default function KioskPage(): ReactElement {
       });
       useKioskStore.getState().setReady(payload);
       setShowStartedOverlay(true);
-      window.setTimeout(() => setShowStartedOverlay(false), 1500);
+      window.setTimeout(() => setShowStartedOverlay(false), 3000);
     } catch (error) {
       console.error("[barcode] Failed to authenticate barcode", error);
       const message =
@@ -203,6 +203,26 @@ export default function KioskPage(): ReactElement {
   const showErrorOverlay = status === "error";
   const showEndedOverlay = Boolean(session && session.status && session.status !== "active");
 
+  // Auto-dismiss error overlay after 3s by resetting kiosk
+  useEffect(() => {
+    if (showErrorOverlay) {
+      const t = window.setTimeout(() => {
+        reset();
+      }, 3000);
+      return () => window.clearTimeout(t);
+    }
+  }, [showErrorOverlay, reset]);
+
+  // Auto-dismiss ended overlay after 3s by resetting kiosk to idle
+  useEffect(() => {
+    if (showEndedOverlay) {
+      const t = window.setTimeout(() => {
+        reset();
+      }, 3000);
+      return () => window.clearTimeout(t);
+    }
+  }, [showEndedOverlay, reset]);
+
   const handleCloseSession = useCallback(async () => {
     if (isClosing) {
       return;
@@ -269,7 +289,7 @@ export default function KioskPage(): ReactElement {
   return (
     <div className="relative flex min-h-screen flex-col">
       {showErrorOverlay && (
-        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-neutral-950/90 px-8 text-center">
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-neutral-950/90 px-8 text-center animate-fade-3s">
           <h2 className="text-2xl font-semibold text-rose-200">Session paused due to an error</h2>
           <p className="max-w-md text-sm text-neutral-200">
             {errorMessage ?? "Something went wrong while talking to Supabase. Please try again."}
@@ -300,13 +320,13 @@ export default function KioskPage(): ReactElement {
         </div>
       )}
       {showStartedOverlay && (
-        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-neutral-950/70 px-8 text-center">
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-neutral-950/70 px-8 text-center animate-fade-3s">
           <h2 className="text-2xl font-semibold text-emerald-200">Session started</h2>
           <p className="text-sm text-neutral-200">You can begin scanning items.</p>
         </div>
       )}
       {showExpiredOverlay && (
-        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-neutral-950/90 px-8 text-center">
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-neutral-950/90 px-8 text-center animate-fade-3s">
           <h2 className="text-2xl font-semibold text-neutral-100">Session expired</h2>
           <p className="max-w-md text-sm text-neutral-300">
             Your session expired due to inactivity. Tap below to start a new session.
@@ -326,7 +346,7 @@ export default function KioskPage(): ReactElement {
         </div>
       )}
       {showEndedOverlay && (
-        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-neutral-950/90 px-8 text-center">
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-neutral-950/90 px-8 text-center animate-fade-3s">
           <h2 className="text-2xl font-semibold text-neutral-100">Session ended</h2>
           <p className="max-w-md text-sm text-neutral-300">
             Your previous session has been completed or expired. Start a new scan when ready.
