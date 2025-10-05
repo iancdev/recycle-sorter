@@ -14,6 +14,7 @@ type UseBarcodeScannerOptions = {
   onScan?: (barcode: string) => void;
   facingMode?: "environment" | "user";
   debounceMs?: number;
+  decodeIntervalMs?: number;
 };
 
 interface UseBarcodeScannerResult {
@@ -27,7 +28,7 @@ interface UseBarcodeScannerResult {
 
 const TARGET_CAMERA_LABEL = "Front Camera";
 const MAX_FRAME_DIMENSION = 1920;
-const DECODE_INTERVAL_MS = 80; // ~12.5 fps
+const DEFAULT_DECODE_INTERVAL_MS = 80; // ~12.5 fps
 const MAX_DEBUG_SAMPLES = 10;
 
 const BASE_VIDEO_CONSTRAINTS: Pick<MediaTrackConstraints, "width" | "height" | "frameRate" | "aspectRatio"> = {
@@ -51,6 +52,36 @@ const ZXING_OPTIONS: ReaderOptions = {
   maxNumberOfSymbols: 1,
   binarizer: "LocalAverage",
 };
+
+const ZXING_FALLBACK_PROFILES: ReadonlyArray<ReaderOptions> = [
+  {
+    formats: ["Code128"],
+    tryHarder: true,
+    tryRotate: true,
+    tryInvert: true,
+    tryDownscale: true,
+    maxNumberOfSymbols: 1,
+    binarizer: "LocalAverage",
+  },
+  {
+    formats: ["Code128"],
+    tryHarder: true,
+    tryRotate: true,
+    tryInvert: true,
+    tryDownscale: true,
+    maxNumberOfSymbols: 1,
+    binarizer: "GlobalHistogram",
+  },
+  {
+    formats: ["Code128"],
+    tryHarder: true,
+    tryRotate: true,
+    tryInvert: true,
+    tryDownscale: true,
+    maxNumberOfSymbols: 1,
+    binarizer: "FixedThreshold",
+  },
+];
 
 let zxingReadyPromise: Promise<void> | null = null;
 
@@ -129,7 +160,7 @@ async function selectFrontCamera(fallbackFacingMode: "user" | "environment"): Pr
 export function useBarcodeScanner(
   options: UseBarcodeScannerOptions = {},
 ): UseBarcodeScannerResult {
-  const { onScan, facingMode = "user", debounceMs = 1200 } = options;
+  const { onScan, facingMode = "user", debounceMs = 1200, decodeIntervalMs } = options;
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -140,6 +171,7 @@ export function useBarcodeScanner(
   const debugSampleRef = useRef(0);
   const lastAttemptAtRef = useRef<number | null>(null);
   const lastDecodeAtRef = useRef(0);
+  const decodeIntervalRef = useRef<number>(decodeIntervalMs ?? DEFAULT_DECODE_INTERVAL_MS);
   const useBarcodeDetectorRef = useRef(false);
   const barcodeDetectorRef = useRef<BarcodeDetector | null>(null);
   const devicesRef = useRef<MediaDeviceInfo[]>([]);
@@ -250,7 +282,7 @@ export function useBarcodeScanner(
       }
     }
 
-    // ZXing fallback
+    // ZXing fallback (multi-pass)
     let readResults: ReadResult[] = [];
     let imageData: ImageData | null = null;
     try {
@@ -269,7 +301,22 @@ export function useBarcodeScanner(
     }
 
     if (readResults.length === 0) {
-      return;
+      for (const profile of ZXING_FALLBACK_PROFILES) {
+        try {
+          readResults = await readBarcodes(imageData, profile);
+        } catch (e) {
+          if (debugSampleRef.current < MAX_DEBUG_SAMPLES) {
+            console.debug("[barcode] ZXing fallback error", { binarizer: profile.binarizer }, e);
+          }
+          readResults = [];
+        }
+        if (readResults.length > 0) {
+          break;
+        }
+      }
+      if (readResults.length === 0) {
+        return;
+      }
     }
 
     const [firstResult] = readResults;
@@ -391,19 +438,21 @@ export function useBarcodeScanner(
         barcodeDetectorRef.current = null;
       }
 
-      const loop = async () => {
-        rafRef.current = requestAnimationFrame(loop);
-        if (statusRef.current !== "scanning") {
-          return;
-        }
+      const useRVFC = typeof (video as unknown as { requestVideoFrameCallback?: unknown }).requestVideoFrameCallback === "function";
+
+      const onVideoFrame = async () => {
+        if (statusRef.current !== "scanning") return;
         if (!videoRef.current || videoRef.current.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+          scheduleNext();
           return;
         }
         if (decodingRef.current) {
+          scheduleNext();
           return;
         }
         const now = Date.now();
-        if (now - lastDecodeAtRef.current < DECODE_INTERVAL_MS) {
+        if (now - lastDecodeAtRef.current < decodeIntervalRef.current) {
+          scheduleNext();
           return;
         }
         lastDecodeAtRef.current = now;
@@ -412,6 +461,17 @@ export function useBarcodeScanner(
           await decodeCurrentFrame();
         } finally {
           decodingRef.current = false;
+          scheduleNext();
+        }
+      };
+
+      const scheduleNext = () => {
+        if (statusRef.current !== "scanning") return;
+        if (useRVFC) {
+          // Safari/Chrome
+          (video as unknown as { requestVideoFrameCallback: (cb: () => void) => number }).requestVideoFrameCallback(onVideoFrame);
+        } else {
+          rafRef.current = requestAnimationFrame(onVideoFrame);
         }
       };
 
@@ -440,7 +500,7 @@ export function useBarcodeScanner(
       } catch (e) {
         console.warn("[barcode] Unable to enumerate devices after start", e);
       }
-      loop();
+      scheduleNext();
     } catch (error) {
       console.error("[barcode] Failed to start scanner", error);
       cleanupMedia();
