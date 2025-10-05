@@ -390,6 +390,7 @@ def currentState():
     """
     try:
         state = get_serial_client().get_latest_state()
+        print(f"[ESP32] Current state: {state}")
         if isinstance(state, tuple) and len(state) == 2:
             return bool(state[0]), bool(state[1])
         return False, False
