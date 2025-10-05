@@ -28,7 +28,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or ""
 ROBOFLOW_API_KEY = os.environ.get("ROBOFLOW_API_KEY") or ""
 ROBOFLOW_MODEL_URL = (
     os.environ.get("ROBOFLOW_MODEL_URL")
-    or "https://api.roboflow.com/workflows/ftc16031/detect-and-classify"
+    or "https://serverless.roboflow.com/infer/workflows/ftc16031/detect-and-classify-2"
 )
 try:
     ROBOFLOW_CONFIDENCE = int(os.environ.get("ROBOFLOW_CONFIDENCE") or "40")
@@ -750,6 +750,17 @@ def _parse_workflow_from_url(url):
         pass
     return None, None
 
+def _is_serverless_workflows_url(url):
+    try:
+        from urllib.parse import urlparse
+        p = urlparse(url)
+        return (
+            p.netloc.lower().startswith("serverless.roboflow.com")
+            and "/infer/workflows/" in p.path
+        )
+    except Exception:
+        return False
+
 def _normalize_roboflow_url(url, api_key, confidence=None):
     """Return a proper Roboflow inference URL.
 
@@ -889,6 +900,48 @@ def recognizeImage(image):
             return 3
         except Exception as exc:
             print(f"[Roboflow] Local inference SDK call failed: {exc}")
+
+    # Serverless Workflows endpoint (hosted): JSON body with inputs.image {type, value}
+    if _is_serverless_workflows_url(ROBOFLOW_MODEL_URL):
+        try:
+            import base64, json as _json
+            image_type = (os.environ.get("ROBOFLOW_IMAGE_TYPE") or "base64").strip().lower()
+            # Optionally allow URL-based testing via ROBOFLOW_TEST_IMAGE_URL
+            if image_type == "url":
+                test_url = os.environ.get("ROBOFLOW_TEST_IMAGE_URL")
+                if not test_url:
+                    raise ValueError("ROBOFLOW_IMAGE_TYPE=url requires ROBOFLOW_TEST_IMAGE_URL to be set")
+                image_field = {"type": "url", "value": test_url}
+            else:
+                b64 = base64.b64encode(image_bytes).decode("ascii")
+                image_field = {"type": "base64", "value": b64}
+
+            payload = {
+                "api_key": ROBOFLOW_API_KEY,
+                "inputs": {
+                    "image": image_field,
+                },
+            }
+            headers = {"Content-Type": "application/json", "Accept": "application/json"}
+            response = requests.post(ROBOFLOW_MODEL_URL, headers=headers, data=_json.dumps(payload), timeout=25)
+            if response.status_code >= 400:
+                print(f"[Roboflow] Serverless error {response.status_code}: {response.text.strip()}")
+                return 3
+            try:
+                result = response.json()
+            except Exception:
+                result = _json.loads(response.text)
+
+            label, conf = _find_best_prediction(result)
+            if not label:
+                print("[Roboflow] Serverless: no predictions found; defaulting to garbage (3)")
+                return 3
+            category_id = _label_to_category_id(label)
+            print(f"[Roboflow] Serverless top label '{label}' (conf={conf}) ⇒ category ID {category_id}")
+            return category_id
+        except Exception as exc:
+            print(f"[Roboflow] Serverless request failed: {exc}")
+            return 3
 
     url = _normalize_roboflow_url(ROBOFLOW_MODEL_URL, ROBOFLOW_API_KEY, ROBOFLOW_CONFIDENCE)
     print(f"[Roboflow] POST {url}")
