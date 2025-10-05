@@ -388,21 +388,143 @@ export default function KioskPage(): ReactElement {
 
       <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-8 py-10 lg:flex-row">
         <section className="flex w-full flex-1 flex-col gap-6">
-          <div className="rounded-3xl border border-neutral-800 bg-neutral-900/60 p-8 text-center">
-            <h2 className="text-2xl font-semibold text-neutral-50">{status === "ready" ? "Latest item" : "Scan your student ID"}</h2>
-            <p className="mt-2 text-sm text-neutral-400">
-              Hold your student ID in front of the camera. Scanning runs in the background.
-            </p>
-            <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-neutral-700 bg-neutral-900/80 px-4 py-1 text-xs uppercase tracking-wide text-neutral-300">
-              <span className="font-medium">Scanner</span>
-              <span className="text-neutral-100">{scannerLabel}</span>
-            </div>
-            {scannerError && (
-              <p className="mt-3 text-xs text-rose-400">{scannerError}</p>
-            )}
-            {/* Hidden video element to drive the scanner without showing preview */}
-            <video ref={videoRef} className="hidden" muted playsInline autoPlay />
-          </div>
+          {status !== "ready" ? (
+            <>
+              <div className="relative aspect-[4/3] overflow-hidden rounded-3xl border border-neutral-800 bg-black">
+                <video
+                  ref={videoRef}
+                  className="h-full w-full object-cover"
+                  muted
+                  playsInline
+                  autoPlay
+                />
+                <div className="pointer-events-none absolute inset-x-6 bottom-6 rounded-2xl bg-neutral-900/80 px-4 py-3 text-sm text-neutral-200 shadow-lg">
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium">Scanner status</span>
+                    <span className="text-neutral-100">{scannerLabel}</span>
+                  </div>
+                  {scannerError ? (
+                    <p className="mt-2 text-xs text-rose-400">{scannerError}</p>
+                  ) : (
+                    <p className="mt-2 text-xs text-neutral-400">
+                      Hold your student ID in front of the camera.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-3xl border border-neutral-800 bg-neutral-900/60 p-8 text-center">
+                <h2 className="text-2xl font-semibold text-neutral-50">Scan your student ID</h2>
+                <p className="mt-2 text-sm text-neutral-400">
+                  Scanning runs in the background; you’ll be signed in automatically.
+                </p>
+                <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-neutral-700 bg-neutral-900/80 px-4 py-1 text-xs uppercase tracking-wide text-neutral-300">
+                  <span className="font-medium">Scanner</span>
+                  <span className="text-neutral-100">{scannerLabel}</span>
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="rounded-3xl border border-neutral-800 bg-neutral-900/60 p-6">
+                <h2 className="text-lg font-semibold text-neutral-50">Latest item</h2>
+                {latestItem && latestCategory ? (
+                  <div className="space-y-3 text-sm text-neutral-200">
+                    {enableAudioFeedback ? (
+                      <div className="flex items-center justify-between gap-3 rounded-2xl border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                        <div className="text-left">
+                          <p>
+                            {isSynthesizing
+                              ? "Preparing announcement…"
+                              : announcement?.text ?? "Ready to announce."}
+                          </p>
+                        </div>
+                        {announcement && (
+                          <button
+                            type="button"
+                            onClick={clearAnnouncement}
+                            className="rounded-full border border-amber-400/60 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-amber-200 transition hover:bg-amber-400/10"
+                          >
+                            Dismiss
+                          </button>
+                        )}
+                      </div>
+                    ) : null}
+                    <div>
+                      <p className="text-neutral-400">Category</p>
+                      <p className="text-base font-semibold text-neutral-50">
+                        {latestCategory.display_name}
+                      </p>
+                    </div>
+                    <div className="flex items-center justify-between text-sm text-neutral-300">
+                      <span>Payout</span>
+                      <span className="font-semibold text-sky-300">{latestAmount}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-xs text-neutral-400">
+                      <span>Detected</span>
+                      <span>
+                        {new Date(latestItem.detected_at).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                          second: "2-digit",
+                        })}
+                      </span>
+                    </div>
+                    {typeof latestItem.confidence === "number" && (
+                      <div className="flex items-center justify-between text-xs text-neutral-400">
+                        <span>Confidence</span>
+                        <span>{Math.round(latestItem.confidence * 100)}%</span>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <p className="mt-4 text-sm text-neutral-400">Waiting for first item…</p>
+                )}
+              </div>
+
+              <div className="rounded-3xl border border-neutral-800 bg-neutral-900/60 p-6 text-sm text-neutral-200">
+                <h2 className="text-lg font-semibold text-neutral-50">Receipt</h2>
+                {receiptItems.length > 0 ? (
+                  <ul className="mt-4 max-h-72 space-y-3 overflow-y-auto pr-1">
+                    {receiptItems.map((item) => {
+                      const category = categories[item.category_id];
+                      return (
+                        <li
+                          key={item.id}
+                          className="rounded-2xl border border-neutral-800 bg-neutral-950/60 px-4 py-3"
+                        >
+                          <div className="flex items-center justify-between text-sm text-neutral-100">
+                            <span className="font-medium">
+                              {category?.display_name ?? "Item"}
+                            </span>
+                            <span className="font-semibold text-sky-300">
+                              {formatCurrencyFromCents(item.amount_cents)}
+                            </span>
+                          </div>
+                          <div className="mt-1 flex items-center justify-between text-xs text-neutral-500">
+                            <span>
+                              {new Date(item.detected_at).toLocaleTimeString([], {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                                second: "2-digit",
+                              })}
+                            </span>
+                            {typeof item.confidence === "number" && (
+                              <span>{Math.round(item.confidence * 100)}%</span>
+                            )}
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : (
+                  <p className="mt-4 text-sm text-neutral-400">
+                    Once items are recognised, they will appear here with their payout and confidence.
+                  </p>
+                )}
+              </div>
+            </>
+          )}
 
           <div className="rounded-3xl border border-neutral-800 bg-neutral-900/60 p-5 text-sm text-neutral-200">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -463,10 +585,10 @@ export default function KioskPage(): ReactElement {
         </section>
 
         <aside className="w-full max-w-[22rem] space-y-6">
-          <div className="rounded-3xl border border-neutral-800 bg-neutral-900/60 p-6">
-            <h2 className="text-lg font-semibold text-neutral-50">Latest item</h2>
-            {status === "ready" && latestItem && latestCategory ? (
-              <div className="space-y-3 text-sm text-neutral-200">
+          {status !== "ready" && (
+            <div className="rounded-3xl border border-neutral-800 bg-neutral-900/60 p-6">
+              <h2 className="text-lg font-semibold text-neutral-50">Latest item</h2>
+              <div className="mt-4 space-y-3 text-sm text-neutral-400">
                 {enableAudioFeedback ? (
                   <div className="flex items-center justify-between gap-3 rounded-2xl border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
                     <div className="text-left">
@@ -475,68 +597,13 @@ export default function KioskPage(): ReactElement {
                           ? "Preparing announcement…"
                           : announcement?.text ?? "Ready to announce."}
                       </p>
-                      {announcement && (
-                        <p className="mt-1 text-[10px] uppercase tracking-wide text-amber-300">
-                          Source: {announcement.provider.text}/{announcement.provider.audio}
-                        </p>
-                      )}
                     </div>
-                    {announcement && (
-                      <button
-                        type="button"
-                        onClick={clearAnnouncement}
-                        className="rounded-full border border-amber-400/60 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-amber-200 transition hover:bg-amber-400/10"
-                      >
-                        Dismiss
-                      </button>
-                    )}
                   </div>
-                ) : (
-                  <p className="text-xs text-neutral-500">
-                    Audio feedback disabled. Set NEXT_PUBLIC_ENABLE_AUDIO_FEEDBACK=true to enable.
-                  </p>
-                )}
-                <div>
-                  <p className="text-neutral-400">Category</p>
-                  <p className="text-base font-semibold text-neutral-50">
-                    {latestCategory.display_name}
-                  </p>
-                </div>
-                <div className="flex items-center justify-between text-sm text-neutral-300">
-                  <span>Payout</span>
-                  <span className="font-semibold text-sky-300">{latestAmount}</span>
-                </div>
-                <div className="flex items-center justify-between text-xs text-neutral-400">
-                  <span>Detected</span>
-                  <span>
-                    {new Date(latestItem.detected_at).toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                      second: "2-digit",
-                    })}
-                  </span>
-                </div>
-                {typeof latestItem.confidence === "number" && (
-                  <div className="flex items-center justify-between text-xs text-neutral-400">
-                    <span>Confidence</span>
-                    <span>{Math.round(latestItem.confidence * 100)}%</span>
-                  </div>
-                )}
+                ) : null}
+                <p>Awaiting a valid scan. Latest item details will appear once authenticated.</p>
               </div>
-            ) : (
-              <div className="mt-4 space-y-3 text-sm text-neutral-400">
-                <p>
-                  Deposited items will appear here with category, reward, and
-                  detection confidence.
-                </p>
-                {enableAudioFeedback && (
-                  <p className="text-xs text-neutral-500">
-                    Audio feedback idle. Scan an item to generate announcements.
-                  </p>
-                )}
-              </div>
-            )}
-          </div>
+            </div>
+          )}
 
           {status === "ready" && (
             <div className="rounded-3xl border border-neutral-800 bg-neutral-900/60 p-6 text-sm text-neutral-200">
