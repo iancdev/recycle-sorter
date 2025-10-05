@@ -432,8 +432,16 @@ def _open_camera(index=0):
             for backend in backends:
                 backend_tried.append(backend)
                 try:
+                    try:
+                        name = "CAP_DSHOW" if backend == getattr(cv2, "CAP_DSHOW", -1) else (
+                            "CAP_MSMF" if backend == getattr(cv2, "CAP_MSMF", -2) else "DEFAULT"
+                        )
+                        print(f"[Webcam] Opening camera index {index} with {name}...")
+                    except Exception:
+                        pass
                     c = cv2.VideoCapture(index, backend)
                     if c.isOpened():
+                        print("[Webcam] Camera opened.")
                         cap = c
                         break
                     else:
