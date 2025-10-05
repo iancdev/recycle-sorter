@@ -232,6 +232,7 @@ export default function KioskPage(): ReactElement {
         .from("sessions")
         .select("id,total_cents,started_at,status")
         .eq("profile_id", profileId)
+        .eq("status", "complete")
         .order("started_at", { ascending: false })
         .limit(5);
 
