@@ -37,11 +37,29 @@ const BASE_VIDEO_CONSTRAINTS: Pick<MediaTrackConstraints, "width" | "height" | "
   aspectRatio: { ideal: 4 / 3 },
   frameRate: { ideal: 30, max: 60 },
 };
-const ADVANCED_VIDEO_SETTINGS: MediaTrackConstraintSet[] = [
-  { focusMode: "continuous" } as unknown as MediaTrackConstraintSet,
-  { exposureMode: "continuous" } as unknown as MediaTrackConstraintSet,
-  { whiteBalanceMode: "continuous" } as unknown as MediaTrackConstraintSet,
-];
+
+function buildSupportedAdvancedConstraints(track: MediaStreamTrack): MediaTrackConstraintSet[] {
+  // Capabilities are not standardized across browsers; gate each property.
+  const caps = (track.getCapabilities ? track.getCapabilities() : undefined) as unknown as
+    | {
+        focusMode?: string[];
+        exposureMode?: string[];
+        whiteBalanceMode?: string[];
+      }
+    | undefined;
+
+  const advanced: MediaTrackConstraintSet[] = [];
+  if (caps?.focusMode?.includes?.("continuous")) {
+    advanced.push({ focusMode: "continuous" } as unknown as MediaTrackConstraintSet);
+  }
+  if (caps?.exposureMode?.includes?.("continuous")) {
+    advanced.push({ exposureMode: "continuous" } as unknown as MediaTrackConstraintSet);
+  }
+  if (caps?.whiteBalanceMode?.includes?.("continuous")) {
+    advanced.push({ whiteBalanceMode: "continuous" } as unknown as MediaTrackConstraintSet);
+  }
+  return advanced;
+}
 
 const ZXING_OPTIONS: ReaderOptions = {
   formats: ["Code128"],
@@ -119,7 +137,6 @@ async function selectFrontCamera(fallbackFacingMode: "user" | "environment"): Pr
         return {
           deviceId: { exact: match.deviceId },
           facingMode: { ideal: "user" },
-          advanced: ADVANCED_VIDEO_SETTINGS,
           ...BASE_VIDEO_CONSTRAINTS,
         };
       }
@@ -152,7 +169,6 @@ async function selectFrontCamera(fallbackFacingMode: "user" | "environment"): Pr
 
   return {
     facingMode: { ideal: fallbackFacingMode },
-    advanced: ADVANCED_VIDEO_SETTINGS,
     ...BASE_VIDEO_CONSTRAINTS,
   };
 }
@@ -398,10 +414,14 @@ export function useBarcodeScanner(
 
       const [track] = stream.getVideoTracks();
       if (track?.applyConstraints) {
-        try {
-          await track.applyConstraints({ advanced: ADVANCED_VIDEO_SETTINGS });
-        } catch (constraintError) {
-          console.warn("[barcode] Unable to apply advanced camera constraints", constraintError);
+        const advanced = buildSupportedAdvancedConstraints(track);
+        if (advanced.length > 0) {
+          try {
+            await track.applyConstraints({ advanced });
+          } catch (constraintError) {
+            // Silently ignore on browsers that reject unsupported constraints despite gating
+            console.debug("[barcode] Advanced constraints rejected by browser", constraintError);
+          }
         }
       }
 
@@ -498,7 +518,7 @@ export function useBarcodeScanner(
           labels: devicesRef.current.map((d) => d.label),
         });
       } catch (e) {
-        console.warn("[barcode] Unable to enumerate devices after start", e);
+        console.debug("[barcode] Unable to enumerate devices after start", e);
       }
       scheduleNext();
     } catch (error) {
@@ -547,16 +567,18 @@ export function useBarcodeScanner(
         video: {
           deviceId: { exact: next.deviceId },
           ...BASE_VIDEO_CONSTRAINTS,
-          advanced: ADVANCED_VIDEO_SETTINGS,
         },
         audio: false,
       });
       const [track] = stream.getVideoTracks();
       if (track?.applyConstraints) {
-        try {
-          await track.applyConstraints({ advanced: ADVANCED_VIDEO_SETTINGS });
-        } catch (constraintError) {
-          console.warn("[barcode] Unable to apply advanced constraints on switch", constraintError);
+        const advanced = buildSupportedAdvancedConstraints(track);
+        if (advanced.length > 0) {
+          try {
+            await track.applyConstraints({ advanced });
+          } catch (constraintError) {
+            console.debug("[barcode] Advanced constraints rejected on switch", constraintError);
+          }
         }
       }
       if (video) {
