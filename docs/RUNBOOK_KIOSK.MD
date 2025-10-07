@@ -20,7 +20,7 @@ Ensure the following environment variables are configured in Netlify (and `.env.
 
 ## Pre-flight Checklist
 1. **Network** – Confirm the kiosk iPad and edge computer are on the trusted network with outbound HTTPS.
-2. **Camera** – Load `/kiosk` and verify the video feed shows the front-facing camera.
+2. **Camera** – Open `/` (root) or `/kiosk` and verify the video feed shows the front-facing camera.
 3. **Barcode Test** – Scan a known Code 128 barcode; the kiosk should authenticate and display session info.
 4. **Edge Link** – Confirm the edge computer establishes a session and classification posts appear in the receipt.
 5. **Audio (Optional)** – With audio enabled, deposit an item and verify the announcement plays.
@@ -34,7 +34,7 @@ Use this panel to triage connectivity issues before escalating.
 ## Common Recovery Steps
 | Symptom | Action |
 | --- | --- |
-| Camera status stuck on "requesting" | Reload the `/kiosk` page. If unresolved, open Safari settings and grant camera permission. |
+| Camera status stuck on "requesting" | Reload the homepage (`/`) or `/kiosk`. If unresolved, open Safari settings and grant camera permission. |
 | Realtime status shows "Disconnected" | Check network connectivity; verify Supabase credentials. Reload kiosk after resolving network. |
 | Session stuck in "Error" overlay | Tap **Reset kiosk** (clears local state) and re-scan barcode. |
 | Audio not playing | Confirm audio env vars are set and iPad volume is up; check browser permissions for autoplay. |
